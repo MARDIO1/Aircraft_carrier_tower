@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from protocol import Protocol
 from initial import SerialInitializer
 from playerInput import PlayerInput
-from GUI import GroundStationGUI
+from GUI_enhanced import EnhancedGroundStationGUI
 
 def main():
     """主程序入口"""
@@ -21,8 +21,8 @@ def main():
     # 启动输入捕获
     player_input.start_input_capture()
     
-    # 创建并运行GUI
-    gui = GroundStationGUI(protocol, serial_initializer, player_input)
+    # 创建并运行增强版GUI
+    gui = EnhancedGroundStationGUI(protocol, serial_initializer, player_input)
     
     try:
         gui.run()
