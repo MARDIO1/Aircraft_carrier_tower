@@ -25,20 +25,20 @@ class Protocol:
     
     def _calculate_crc8(self, data):
         """
-        计算CRC-8校验和
-        使用多项式: x^8 + x^2 + x + 1 (0x07)
+        计算CRC-8/MAXIM校验和
+        使用多项式: x^8 + x^5 + x^4 + 1 (0x8C)
         """
-        crc = 0
+        crc = 0x00
         for byte in data:
             crc ^= byte
             for _ in range(8):
-                if crc & 0x80:
-                    crc = (crc << 1) ^ 0x07
+                if crc & 0x01:
+                    crc = (crc >> 1) ^ 0x8C
                 else:
-                    crc = (crc << 1)
+                    crc >>= 1
                 crc &= 0xFF
         return crc
-    
+
     def encode_up_frame(self, switch_cmd, fan_rpm, servo_angles):
         """
         编码上行数据包（地面站 → 制导镖）
