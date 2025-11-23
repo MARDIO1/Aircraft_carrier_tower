@@ -12,6 +12,10 @@ class Protocol:
         self.DOWN_TAIL = 0xDD
         self.DOWN_FRAME_SZ = 40  # header(1) + last_switch(1) + gyro[9](36) + tail(1) + crc(1) = 40
         
+        # 数据包大小配置
+        self.data_packet_mode = "full"  # "full" 或 "compact"
+        self.send_frequency = 50  # Hz
+        
         # 兼容性常量
         self.ground_header = self.UP_HEADER
         self.ground_footer = self.UP_TAIL
@@ -44,7 +48,7 @@ class Protocol:
         编码上行数据包（地面站 → 制导镖）
         完全匹配C结构定义：header + switch_cmd + fan_rpm + servo[4] + tail + crc
         Args:
-            switch_cmd: int 总开关 (0=关, 1=开)
+            switch_cmd: int 总开关 (0=关, 1=开) 
             fan_rpm: int 风扇转速 (0-1000)
             servo_angles: list 4个舵机角度 [0-180, 0-180, 0-180, 0-180]
         Returns:
@@ -206,3 +210,77 @@ class Protocol:
     def clear_buffer(self):
         """清空接收缓冲区"""
         self.receive_buffer.clear()
+    
+    # 新增功能：数据包大小和频率控制
+    def set_data_packet_mode(self, mode):
+        """设置数据包模式
+        Args:
+            mode: str "full" 或 "compact"
+        """
+        if mode in ["full", "compact"]:
+            self.data_packet_mode = mode
+            return True
+        return False
+    
+    def set_send_frequency(self, frequency):
+        """设置发送频率
+        Args:
+            frequency: int 频率值 (Hz)
+        """
+        if 1 <= frequency <= 100:  # 限制在1-100Hz范围内
+            self.send_frequency = frequency
+            return True
+        return False
+    
+    def encode_compact_frame(self, switch_cmd, fan_rpm):
+        """
+        编码精简上行数据包（只包含开关和风扇转速）
+        Args:
+            switch_cmd: int 总开关 (0=关, 1=开)
+            fan_rpm: int 风扇转速 (0-1000)
+        Returns:
+            bytes: 7字节数据包
+        """
+        try:
+            # 精简数据包格式: header + switch_cmd + fan_rpm + tail + crc
+            packet_without_crc = struct.pack('<B B h B',
+                                self.UP_HEADER,    # 0xAA
+                                switch_cmd,        # 总开关
+                                fan_rpm,           # 风扇转速
+                                self.UP_TAIL)      # 0xBB
+            
+            # 计算CRC
+            crc = self._calculate_crc8(packet_without_crc)
+            
+            # 添加CRC字节
+            full_packet = packet_without_crc + bytes([crc])
+            
+            return full_packet
+        except Exception as e:
+            print(f"编码精简数据包错误: {e}")
+            return None
+    
+    def get_current_packet_size(self):
+        """获取当前数据包大小
+        Returns:
+            int: 数据包字节数
+        """
+        if self.data_packet_mode == "compact":
+            return 7  # header(1) + switch(1) + fan_rpm(2) + tail(1) + crc(1) = 7
+        else:
+            return self.UP_FRAME_SZ  # 14字节完整数据包
+    
+    def encode_control_data(self, switch_cmd, fan_rpm, servo_angles):
+        """
+        根据当前模式编码控制数据
+        Args:
+            switch_cmd: int 总开关 (0=关, 1=开)
+            fan_rpm: int 风扇转速 (0-1000)
+            servo_angles: list 4个舵机角度 [0-180, 0-180, 0-180, 0-180]
+        Returns:
+            bytes: 编码后的数据包
+        """
+        if self.data_packet_mode == "compact":
+            return self.encode_compact_frame(switch_cmd, fan_rpm)
+        else:
+            return self.encode_up_frame(switch_cmd, fan_rpm, servo_angles)

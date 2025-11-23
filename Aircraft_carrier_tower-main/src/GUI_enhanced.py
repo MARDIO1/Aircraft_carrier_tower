@@ -13,7 +13,7 @@ class EnhancedGroundStationGUI:
         self.root.geometry("800x600")
         
         self.is_connected = False
-        self.update_interval = 100  # 毫秒
+        self.update_interval = 20  # 毫秒 (50Hz)
         
         # 传感器数据历史记录
         self.sensor_history = {
@@ -22,6 +22,20 @@ class EnhancedGroundStationGUI:
             'mx': [], 'my': [], 'mz': []
         }
         self.max_history = 50  # 最大历史数据点数
+        
+        # 自动发送控制
+        self.auto_send_enabled = False
+        self.last_send_time = 0
+        self.send_interval = 20  # 毫秒 (50Hz)
+        self.send_statistics = {
+            'total_sent': 0,
+            'last_second_count': 0,
+            'current_frequency': 0.0
+        }
+        
+        # 数据包大小控制
+        self.data_packet_mode = tk.StringVar(value="full")  # "full" 或 "compact"
+        self.send_frequency = tk.IntVar(value=50)  # Hz
         
         self.setup_gui()
     
@@ -53,23 +67,70 @@ class EnhancedGroundStationGUI:
         control_frame = ttk.LabelFrame(main_frame, text="系统控制", padding="5")
         control_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        # 系统开关控制
+        # 系统开关控制 - 改进为按钮形式
         ttk.Label(control_frame, text="系统状态:").grid(row=0, column=0, sticky=tk.W)
+        
+        # 创建开关按钮框架
+        switch_frame = ttk.Frame(control_frame)
+        switch_frame.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        
         self.throttle_var = tk.DoubleVar(value=0.0)
-        self.throttle_scale = ttk.Scale(control_frame, from_=0.0, to=1.0, variable=self.throttle_var, 
-                                       orient=tk.HORIZONTAL, command=self.on_throttle_change)
-        self.throttle_scale.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        # 开关按钮
+        self.switch_button = tk.Button(switch_frame, text="🔴 关闭", font=("Arial", 12, "bold"), 
+                                      bg="#f44336", fg="white", width=10, height=2,
+                                      command=self.toggle_system)
+        self.switch_button.grid(row=0, column=0, padx=5)
+        
+        # 状态标签（用于兼容性）
         self.throttle_label = ttk.Label(control_frame, text="关闭", font=("Arial", 10, "bold"))
-        self.throttle_label.grid(row=0, column=2, padx=5)
+        self.throttle_label.grid(row=0, column=1, padx=5)
         
         # 状态指示器
         self.status_indicator = tk.Canvas(control_frame, width=100, height=20)
-        self.status_indicator.grid(row=0, column=3, padx=10)
+        self.status_indicator.grid(row=0, column=2, padx=10)
         self.draw_status_indicator("disconnected")
+        
+        # ========== 数据包和频率控制区域 ==========
+        packet_control_frame = ttk.LabelFrame(main_frame, text="数据包和发送控制", padding="5")
+        packet_control_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # 数据包模式选择
+        ttk.Label(packet_control_frame, text="数据包模式:").grid(row=0, column=0, sticky=tk.W)
+        packet_mode_combo = ttk.Combobox(packet_control_frame, textvariable=self.data_packet_mode, 
+                                        values=["full", "compact"], state="readonly", width=10)
+        packet_mode_combo.grid(row=0, column=1, padx=5)
+        packet_mode_combo.bind('<<ComboboxSelected>>', self.on_packet_mode_change)
+        
+        # 发送频率控制
+        ttk.Label(packet_control_frame, text="发送频率:").grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+        frequency_frame = ttk.Frame(packet_control_frame)
+        frequency_frame.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=5)
+        
+        self.frequency_scale = ttk.Scale(frequency_frame, from_=1, to=100, variable=self.send_frequency, 
+                                        orient=tk.HORIZONTAL, command=self.on_frequency_change)
+        self.frequency_scale.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        self.frequency_label = ttk.Label(frequency_frame, text="50 Hz", font=("Arial", 9, "bold"))
+        self.frequency_label.grid(row=0, column=1, padx=5)
+        
+        # 自动发送控制
+        self.auto_send_var = tk.BooleanVar(value=False)
+        auto_send_check = ttk.Checkbutton(packet_control_frame, text="自动发送", 
+                                         variable=self.auto_send_var, command=self.toggle_auto_send)
+        auto_send_check.grid(row=0, column=4, padx=20)
+        
+        # 数据包大小显示
+        self.packet_size_label = ttk.Label(packet_control_frame, text="数据包大小: 14 字节", font=("Arial", 9))
+        self.packet_size_label.grid(row=0, column=5, padx=10)
+        
+        # 配置网格权重
+        packet_control_frame.columnconfigure(3, weight=1)
+        frequency_frame.columnconfigure(0, weight=1)
         
         # ========== 风扇控制区域 ==========
         fan_frame = ttk.LabelFrame(main_frame, text="风扇控制", padding="5")
-        fan_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+        fan_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
         
         ttk.Label(fan_frame, text="风扇转速:").grid(row=0, column=0, sticky=tk.W)
         self.fan_speed_var = tk.IntVar(value=0)
@@ -155,9 +216,90 @@ class EnhancedGroundStationGUI:
         self.mz_label = ttk.Label(mag_frame, text="mz: 0.00", font=("Arial", 9))
         self.mz_label.grid(row=2, column=0, sticky=tk.W)
         
+        # ========== 发送数据监控区域 ==========
+        send_data_frame = ttk.LabelFrame(main_frame, text="发送数据监控", padding="5")
+        send_data_frame.grid(row=5, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # 发送数据包显示
+        ttk.Label(send_data_frame, text="发送数据包格式:", font=("Arial", 9, "bold")).grid(row=0, column=0, sticky=tk.W, pady=2)
+        
+        # 创建发送数据显示区域
+        self.send_data_text = tk.Text(send_data_frame, height=4, width=80, font=("Consolas", 9), wrap=tk.WORD)
+        self.send_data_text.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # 添加滚动条
+        send_scrollbar = ttk.Scrollbar(send_data_frame, orient=tk.VERTICAL, command=self.send_data_text.yview)
+        self.send_data_text.configure(yscrollcommand=send_scrollbar.set)
+        send_scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+        
+        # 发送数据统计
+        send_stats_frame = ttk.Frame(send_data_frame)
+        send_stats_frame.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=2)
+        
+        self.send_count_label = ttk.Label(send_stats_frame, text="发送次数: 0", font=("Arial", 9))
+        self.send_count_label.grid(row=0, column=0, sticky=tk.W, padx=5)
+        
+        self.last_send_time_label = ttk.Label(send_stats_frame, text="最后发送: --", font=("Arial", 9))
+        self.last_send_time_label.grid(row=0, column=1, sticky=tk.W, padx=20)
+        
+        ttk.Button(send_stats_frame, text="清空显示", command=self.clear_send_data, width=10).grid(row=0, column=2, padx=5)
+        ttk.Button(send_stats_frame, text="复制数据", command=self.copy_send_data, width=10).grid(row=0, column=3, padx=5)
+        
+        # 初始化发送数据统计
+        self.send_count = 0
+        self.last_send_time = None
+        self.send_data_history = []  # 存储发送数据历史
+        self.max_send_history = 50   # 最大历史记录数
+        
+        # 配置网格权重
+        send_data_frame.columnconfigure(0, weight=1)
+        
+        # ========== 回传数据验证区域 ==========
+        feedback_frame = ttk.LabelFrame(main_frame, text="回传数据验证", padding="5")
+        feedback_frame.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # 创建回传数据显示网格
+        feedback_data_frame = ttk.Frame(feedback_frame)
+        feedback_data_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        
+        # 数据包信息
+        packet_frame = ttk.LabelFrame(feedback_data_frame, text="数据包信息", padding="3")
+        packet_frame.grid(row=0, column=0, padx=5, sticky=(tk.W, tk.E))
+        
+        self.packet_count_label = ttk.Label(packet_frame, text="数据包: 0", font=("Arial", 9))
+        self.packet_count_label.grid(row=0, column=0, sticky=tk.W)
+        self.last_packet_time_label = ttk.Label(packet_frame, text="最后接收: --", font=("Arial", 9))
+        self.last_packet_time_label.grid(row=1, column=0, sticky=tk.W)
+        
+        # 原始数据
+        raw_frame = ttk.LabelFrame(feedback_data_frame, text="原始数据", padding="3")
+        raw_frame.grid(row=0, column=1, padx=5, sticky=(tk.W, tk.E))
+        
+        self.raw_data_label = ttk.Label(raw_frame, text="原始: --", font=("Consolas", 8), wraplength=200)
+        self.raw_data_label.grid(row=0, column=0, sticky=tk.W)
+        
+        # 数据状态
+        status_frame = ttk.LabelFrame(feedback_data_frame, text="数据状态", padding="3")
+        status_frame.grid(row=0, column=2, padx=5, sticky=(tk.W, tk.E))
+        
+        self.data_valid_label = ttk.Label(status_frame, text="状态: 等待数据", font=("Arial", 9))
+        self.data_valid_label.grid(row=0, column=0, sticky=tk.W)
+        self.zero_data_warning_label = ttk.Label(status_frame, text="警告: 检测到零数据", font=("Arial", 9), foreground="orange")
+        self.zero_data_warning_label.grid(row=1, column=0, sticky=tk.W)
+        self.zero_data_warning_label.grid_remove()  # 初始隐藏
+        
+        # 初始化计数器
+        self.packet_count = 0
+        self.last_packet_time = None
+        
+        # 兼容性：创建receive_text变量（用于旧代码兼容）
+        self.receive_text = tk.Text(main_frame, height=8, width=80)
+        self.receive_text.grid(row=7, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.receive_text.grid_remove()  # 初始隐藏，因为现在使用高级日志
+        
         # ========== 控制按钮区域 ==========
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, pady=10)
+        button_frame.grid(row=6, column=0, pady=10)
         
         # 主要控制按钮
         ttk.Button(button_frame, text="发送完整数据", command=self.send_full_data, 
@@ -170,16 +312,85 @@ class EnhancedGroundStationGUI:
         ttk.Button(button_frame, text="重置控制", command=self.reset_controls).grid(row=0, column=4, padx=5)
         ttk.Button(button_frame, text="清空历史", command=self.clear_sensor_history).grid(row=0, column=5, padx=5)
         
-        # ========== 接收数据显示区域 ==========
-        receive_frame = ttk.LabelFrame(main_frame, text="数据日志", padding="5")
-        receive_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        # ========== 高级数据日志区域 ==========
+        log_frame = ttk.LabelFrame(main_frame, text="高级数据日志", padding="5")
+        log_frame.grid(row=6, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
-        self.receive_text = tk.Text(receive_frame, height=6, width=80, font=("Consolas", 9))
-        self.receive_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # 创建日志工具栏
+        log_toolbar = ttk.Frame(log_frame)
+        log_toolbar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         
-        scrollbar = ttk.Scrollbar(receive_frame, orient=tk.VERTICAL, command=self.receive_text.yview)
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        self.receive_text.configure(yscrollcommand=scrollbar.set)
+        # 日志控制按钮
+        ttk.Button(log_toolbar, text="清空日志", command=self.clear_receive, width=10).grid(row=0, column=0, padx=2)
+        ttk.Button(log_toolbar, text="导出日志", command=self.export_log, width=10).grid(row=0, column=1, padx=2)
+        ttk.Button(log_toolbar, text="暂停更新", command=self.toggle_log_pause, width=10).grid(row=0, column=2, padx=2)
+        
+        # 日志统计信息
+        self.log_stats_label = ttk.Label(log_toolbar, text="条目: 0", font=("Arial", 9))
+        self.log_stats_label.grid(row=0, column=3, padx=10)
+        
+        # 日志类型过滤器
+        ttk.Label(log_toolbar, text="过滤:", font=("Arial", 9)).grid(row=0, column=4, padx=(20, 5))
+        self.log_filter_var = tk.StringVar(value="全部")
+        log_filter_combo = ttk.Combobox(log_toolbar, textvariable=self.log_filter_var, 
+                                       values=["全部", "发送", "接收", "错误", "状态"], 
+                                       state="readonly", width=8)
+        log_filter_combo.grid(row=0, column=5, padx=2)
+        log_filter_combo.bind('<<ComboboxSelected>>', self.apply_log_filter)
+        
+        # 搜索框
+        ttk.Label(log_toolbar, text="搜索:", font=("Arial", 9)).grid(row=0, column=6, padx=(20, 5))
+        self.log_search_var = tk.StringVar()
+        log_search_entry = ttk.Entry(log_toolbar, textvariable=self.log_search_var, width=15)
+        log_search_entry.grid(row=0, column=7, padx=2)
+        log_search_entry.bind('<KeyRelease>', self.search_log)
+        
+        # 创建高级日志显示区域
+        log_display_frame = ttk.Frame(log_frame)
+        log_display_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # 使用Treeview创建表格样式的日志显示
+        columns = ("时间", "类型", "内容")
+        self.log_tree = ttk.Treeview(log_display_frame, columns=columns, show="tree headings", height=8)
+        
+        # 配置列
+        self.log_tree.column("#0", width=0, stretch=False)  # 隐藏第一列
+        self.log_tree.column("时间", width=80, anchor="center")
+        self.log_tree.column("类型", width=60, anchor="center")
+        self.log_tree.column("内容", width=400, anchor="w")
+        
+        # 配置表头
+        self.log_tree.heading("时间", text="时间")
+        self.log_tree.heading("类型", text="类型")
+        self.log_tree.heading("内容", text="内容")
+        
+        # 添加滚动条
+        log_scrollbar = ttk.Scrollbar(log_display_frame, orient=tk.VERTICAL, command=self.log_tree.yview)
+        self.log_tree.configure(yscrollcommand=log_scrollbar.set)
+        
+        # 布局
+        self.log_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        log_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # 右键菜单
+        self.log_context_menu = tk.Menu(self.root, tearoff=0)
+        self.log_context_menu.add_command(label="复制内容", command=self.copy_log_content)
+        self.log_context_menu.add_command(label="删除选中", command=self.delete_selected_log)
+        self.log_context_menu.add_separator()
+        self.log_context_menu.add_command(label="清空所有", command=self.clear_receive)
+        
+        self.log_tree.bind("<Button-3>", self.show_log_context_menu)  # 右键绑定
+        
+        # 日志状态变量
+        self.log_paused = False
+        self.log_entries = []
+        self.log_entry_count = 0
+        
+        # 配置网格权重
+        log_display_frame.columnconfigure(0, weight=1)
+        log_display_frame.rowconfigure(0, weight=1)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(1, weight=1)
         
         # 配置网格权重
         main_frame.columnconfigure(0, weight=1)
@@ -189,9 +400,12 @@ class EnhancedGroundStationGUI:
         sensor_data_frame.columnconfigure(0, weight=1)
         sensor_data_frame.columnconfigure(1, weight=1)
         sensor_data_frame.columnconfigure(2, weight=1)
-        receive_frame.columnconfigure(0, weight=1)
-        receive_frame.rowconfigure(0, weight=1)
         main_frame.rowconfigure(6, weight=1)
+        
+        # 初始化自动发送定时器
+        self.auto_send_timer = None
+        self.last_auto_send_time = 0
+        self.update_packet_size_display()
     
     def draw_connection_indicator(self, status):
         """绘制连接状态指示器"""
@@ -327,6 +541,8 @@ class EnhancedGroundStationGUI:
             data = self.protocol.encode_up_frame(switch_cmd, fan_rpm, servo_angles)
             if data and self.serial_initializer.send_data(data):
                 self.append_receive_text(f"发送完整数据: 开关={switch_cmd}, 风扇={fan_rpm}RPM, 舵机={servo_angles}")
+                # 显示发送数据包格式
+                self.display_send_data(data, switch_cmd, fan_rpm, servo_angles)
                 # 更新状态指示器
                 if switch_cmd == 1:
                     self.draw_status_indicator("active")
@@ -376,6 +592,25 @@ class EnhancedGroundStationGUI:
         """添加接收文本"""
         self.receive_text.insert(tk.END, f"{text}\n")
         self.receive_text.see(tk.END)
+    
+    def toggle_system(self):
+        """切换系统开关状态"""
+        current_value = self.throttle_var.get()
+        new_value = 1.0 if current_value == 0.0 else 0.0
+        self.throttle_var.set(new_value)
+        
+        # 更新按钮显示
+        if new_value > 0.1:
+            self.switch_button.config(text="🟢 开启", bg="#4CAF50")
+        else:
+            self.switch_button.config(text="🔴 关闭", bg="#f44336")
+        
+        # 更新player_input中的油门值
+        self.player_input.throttle = new_value
+        
+        # 如果已连接，发送控制命令
+        if self.is_connected:
+            self.send_control_data()
     
     def on_throttle_change(self, value):
         """油门滑块变化回调"""
@@ -467,6 +702,9 @@ class EnhancedGroundStationGUI:
             # 更新传感器数据显示
             self.update_sensor_display(gyro_data)
             
+            # 更新回传数据验证区域
+            self.update_feedback_display(packet_data)
+            
             # 格式化显示
             switch_text = "开启" if last_switch == 1 else "关闭"
             gyro_text = f"陀螺仪: gx={gyro_data['gx']:.2f}, gy={gyro_data['gy']:.2f}, gz={gyro_data['gz']:.2f}"
@@ -482,6 +720,36 @@ class EnhancedGroundStationGUI:
             
         except Exception as e:
             self.append_receive_text(f"解析下行数据包错误: {e}")
+    
+    def update_feedback_display(self, packet_data):
+        """更新回传数据验证区域显示"""
+        import time
+        
+        # 更新数据包计数
+        self.packet_count += 1
+        self.last_packet_time = time.time()
+        
+        # 更新数据包信息
+        self.packet_count_label.config(text=f"数据包: {self.packet_count}")
+        time_str = time.strftime("%H:%M:%S", time.localtime(self.last_packet_time))
+        self.last_packet_time_label.config(text=f"最后接收: {time_str}")
+        
+        # 更新原始数据显示
+        raw_data_str = str(packet_data)
+        if len(raw_data_str) > 50:
+            raw_data_str = raw_data_str[:47] + "..."
+        self.raw_data_label.config(text=f"原始: {raw_data_str}")
+        
+        # 检查数据有效性
+        gyro_data = packet_data.get('gyro_data', {})
+        all_zero = all(abs(v) < 0.001 for v in gyro_data.values())
+        
+        if all_zero:
+            self.data_valid_label.config(text="状态: 零数据", foreground="orange")
+            self.zero_data_warning_label.grid()  # 显示警告
+        else:
+            self.data_valid_label.config(text="状态: 数据正常", foreground="green")
+            self.zero_data_warning_label.grid_remove()  # 隐藏警告
     
     def update_sensor_display(self, gyro_data):
         """更新传感器数据显示"""
@@ -505,6 +773,374 @@ class EnhancedGroundStationGUI:
             self.sensor_history[key].append(gyro_data[key])
             if len(self.sensor_history[key]) > self.max_history:
                 self.sensor_history[key].pop(0)
+    
+    def append_receive_text(self, text):
+        """添加接收文本到高级日志"""
+        import time
+        
+        # 确定日志类型
+        if "发送" in text:
+            log_type = "发送"
+            tag = "send"
+        elif "接收" in text:
+            log_type = "接收"
+            tag = "receive"
+        elif "错误" in text:
+            log_type = "错误"
+            tag = "error"
+        else:
+            log_type = "状态"
+            tag = "status"
+        
+        # 获取当前时间
+        current_time = time.strftime("%H:%M:%S", time.localtime())
+        
+        # 创建日志条目
+        log_entry = {
+            "time": current_time,
+            "type": log_type,
+            "content": text,
+            "tag": tag
+        }
+        
+        # 添加到日志列表
+        self.log_entries.append(log_entry)
+        self.log_entry_count += 1
+        
+        # 更新统计信息
+        self.log_stats_label.config(text=f"条目: {self.log_entry_count}")
+        
+        # 如果日志未暂停，更新显示
+        if not self.log_paused:
+            self.update_log_display()
+    
+    def update_log_display(self):
+        """更新日志显示"""
+        # 清空当前显示
+        for item in self.log_tree.get_children():
+            self.log_tree.delete(item)
+        
+        # 应用过滤和搜索
+        filtered_entries = self.filter_log_entries()
+        
+        # 添加条目到Treeview
+        for entry in filtered_entries:
+            item_id = self.log_tree.insert("", "end", values=(entry["time"], entry["type"], entry["content"]))
+            
+            # 根据类型设置标签
+            if entry["tag"] == "error":
+                self.log_tree.item(item_id, tags=("error",))
+            elif entry["tag"] == "send":
+                self.log_tree.item(item_id, tags=("send",))
+            elif entry["tag"] == "receive":
+                self.log_tree.item(item_id, tags=("receive",))
+        
+        # 滚动到底部
+        if filtered_entries:
+            self.log_tree.see(self.log_tree.get_children()[-1])
+    
+    def filter_log_entries(self):
+        """过滤日志条目"""
+        filtered = self.log_entries.copy()
+        
+        # 应用类型过滤
+        filter_type = self.log_filter_var.get()
+        if filter_type != "全部":
+            filtered = [entry for entry in filtered if entry["type"] == filter_type]
+        
+        # 应用搜索过滤
+        search_text = self.log_search_var.get().lower()
+        if search_text:
+            filtered = [entry for entry in filtered if search_text in entry["content"].lower()]
+        
+        return filtered
+    
+    def apply_log_filter(self, event=None):
+        """应用日志过滤器"""
+        self.update_log_display()
+    
+    def search_log(self, event=None):
+        """搜索日志"""
+        self.update_log_display()
+    
+    def toggle_log_pause(self):
+        """切换日志暂停状态"""
+        self.log_paused = not self.log_paused
+        button_text = "继续更新" if self.log_paused else "暂停更新"
+        for widget in self.root.winfo_children():
+            if isinstance(widget, ttk.Button) and widget.cget("text") in ["暂停更新", "继续更新"]:
+                widget.config(text=button_text)
+                break
+    
+    def export_log(self):
+        """导出日志到文件"""
+        import tkinter.filedialog as filedialog
+        import os
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="导出日志"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write("航模地面站数据日志\n")
+                    f.write("=" * 50 + "\n\n")
+                    
+                    for entry in self.log_entries:
+                        f.write(f"[{entry['time']}] [{entry['type']}] {entry['content']}\n")
+                
+                messagebox.showinfo("成功", f"日志已导出到: {os.path.basename(filename)}")
+            except Exception as e:
+                messagebox.showerror("错误", f"导出失败: {e}")
+    
+    def show_log_context_menu(self, event):
+        """显示日志右键菜单"""
+        item = self.log_tree.identify_row(event.y)
+        if item:
+            self.log_tree.selection_set(item)
+            self.log_context_menu.post(event.x_root, event.y_root)
+    
+    def copy_log_content(self):
+        """复制选中的日志内容"""
+        selected = self.log_tree.selection()
+        if selected:
+            item = selected[0]
+            content = self.log_tree.item(item, "values")[2]  # 内容在第三列
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            messagebox.showinfo("成功", "内容已复制到剪贴板")
+    
+    def delete_selected_log(self):
+        """删除选中的日志条目"""
+        selected = self.log_tree.selection()
+        if selected:
+            for item in selected:
+                # 从日志列表中删除对应的条目
+                item_values = self.log_tree.item(item, "values")
+                for i, entry in enumerate(self.log_entries):
+                    if entry["time"] == item_values[0] and entry["content"] == item_values[2]:
+                        del self.log_entries[i]
+                        self.log_entry_count -= 1
+                        break
+                self.log_tree.delete(item)
+            
+            # 更新统计信息
+            self.log_stats_label.config(text=f"条目: {self.log_entry_count}")
+    
+    def clear_receive(self):
+        """清空日志"""
+        self.log_entries = []
+        self.log_entry_count = 0
+        for item in self.log_tree.get_children():
+            self.log_tree.delete(item)
+        self.log_stats_label.config(text="条目: 0")
+    
+    def display_send_data(self, data_bytes, switch_cmd, fan_rpm, servo_angles):
+        """显示发送数据包格式，按照'aa.....bb.j校验位'格式"""
+        import time
+        import struct
+        
+        # 更新发送统计
+        self.send_count += 1
+        self.last_send_time = time.time()
+        
+        # 更新统计显示
+        self.send_count_label.config(text=f"发送次数: {self.send_count}")
+        time_str = time.strftime("%H:%M:%S", time.localtime(self.last_send_time))
+        self.last_send_time_label.config(text=f"最后发送: {time_str}")
+        
+        # 将字节数据转换为十六进制字符串
+        hex_data = data_bytes.hex()
+        
+        # 按照协议格式解析数据包
+        # 上行数据包格式: 0xAA + switch_cmd + fan_rpm + servo[4] + 0xBB + CRC
+        if len(data_bytes) >= 14:  # 完整上行数据包
+            try:
+                # 使用struct正确解析小端序数据
+                unpacked = struct.unpack('<B B h 4h B B', data_bytes)
+                header = unpacked[0]
+                switch_value = unpacked[1]
+                fan_value = unpacked[2]
+                servo1_value = unpacked[3]
+                servo2_value = unpacked[4]
+                servo3_value = unpacked[5]
+                servo4_value = unpacked[6]
+                footer = unpacked[7]
+                crc_value = unpacked[8]
+                
+                # 转换为十六进制显示
+                header_hex = f"{header:02x}"
+                switch_hex = f"{switch_value:02x}"
+                fan_hex = f"{fan_value:04x}"  # 2字节风扇转速
+                servo1_hex = f"{servo1_value:02x}"
+                servo2_hex = f"{servo2_value:02x}"
+                servo3_hex = f"{servo3_value:02x}"
+                servo4_hex = f"{servo4_value:02x}"
+                footer_hex = f"{footer:02x}"
+                crc_hex = f"{crc_value:02x}"
+                
+                # 构建显示格式: aa.....bb.j校验位
+                data_display = f"aa{switch_hex}{fan_hex}{servo1_hex}{servo2_hex}{servo3_hex}{servo4_hex}bb.{crc_hex}"
+                
+                detailed_info = (
+                    f"数据包格式: {data_display}\n"
+                    f"详细解析:\n"
+                    f"  包头: 0x{header_hex} (AA)\n"
+                    f"  开关命令: 0x{switch_hex} = {switch_value} ({'开启' if switch_value == 1 else '关闭'})\n"
+                    f"  风扇转速: 0x{fan_hex} = {fan_value} RPM\n"
+                    f"  舵机1角度: 0x{servo1_hex} = {servo1_value}°\n"
+                    f"  舵机2角度: 0x{servo2_hex} = {servo2_value}°\n"
+                    f"  舵机3角度: 0x{servo3_hex} = {servo3_value}°\n"
+                    f"  舵机4角度: 0x{servo4_hex} = {servo4_value}°\n"
+                    f"  包尾: 0x{footer_hex} (BB)\n"
+                    f"  CRC校验: 0x{crc_hex} = {crc_value}\n"
+                    f"完整十六进制: {hex_data}\n"
+                    f"{'-'*60}"
+                )
+            except Exception as e:
+                # 如果解析失败，使用原始十六进制显示
+                data_display = hex_data
+                detailed_info = f"解析错误: {e}\n完整十六进制: {hex_data}\n{'-'*60}"
+        else:
+            # 简单命令数据包
+            data_display = hex_data
+            detailed_info = f"简单命令数据包: {hex_data}\n{'-'*60}"
+        
+        # 添加到发送数据历史
+        send_entry = {
+            "time": time_str,
+            "data_display": data_display,
+            "detailed_info": detailed_info,
+            "raw_data": hex_data
+        }
+        self.send_data_history.append(send_entry)
+        
+        # 限制历史记录数量
+        if len(self.send_data_history) > self.max_send_history:
+            self.send_data_history.pop(0)
+        
+        # 更新显示区域
+        self.update_send_data_display()
+    
+    def update_send_data_display(self):
+        """更新发送数据显示区域"""
+        # 清空当前显示
+        self.send_data_text.delete(1.0, tk.END)
+        
+        # 添加最新的发送数据
+        for entry in self.send_data_history[-10:]:  # 显示最近10条
+            self.send_data_text.insert(tk.END, f"[{entry['time']}] {entry['data_display']}\n")
+            self.send_data_text.insert(tk.END, f"{entry['detailed_info']}\n\n")
+        
+        # 滚动到底部
+        self.send_data_text.see(tk.END)
+    
+    def clear_send_data(self):
+        """清空发送数据显示"""
+        self.send_data_text.delete(1.0, tk.END)
+        self.send_data_history = []
+        self.send_count = 0
+        self.send_count_label.config(text="发送次数: 0")
+        self.last_send_time_label.config(text="最后发送: --")
+        self.send_data_text.insert(tk.END, "发送数据已清空\n")
+    
+    def copy_send_data(self):
+        """复制发送数据到剪贴板"""
+        if self.send_data_history:
+            # 获取最新的发送数据
+            latest_entry = self.send_data_history[-1]
+            copy_text = f"发送数据包: {latest_entry['data_display']}\n{latest_entry['detailed_info']}"
+            
+            self.root.clipboard_clear()
+            self.root.clipboard_append(copy_text)
+            messagebox.showinfo("成功", "发送数据已复制到剪贴板")
+        else:
+            messagebox.showinfo("信息", "没有可复制的发送数据")
+    
+    # ========== 新增的数据包大小和频率控制回调函数 ==========
+    
+    def on_packet_mode_change(self, event=None):
+        """数据包模式变化回调"""
+        mode = self.data_packet_mode.get()
+        if self.protocol.set_data_packet_mode(mode):
+            self.update_packet_size_display()
+            self.append_receive_text(f"数据包模式已切换为: {mode}")
+        else:
+            messagebox.showerror("错误", "无效的数据包模式")
+    
+    def on_frequency_change(self, value):
+        """发送频率变化回调"""
+        frequency = int(float(value))
+        if self.protocol.set_send_frequency(frequency):
+            self.frequency_label.config(text=f"{frequency} Hz")
+            self.send_interval = int(1000 / frequency)  # 转换为毫秒
+            self.append_receive_text(f"发送频率已设置为: {frequency} Hz")
+            
+            # 如果自动发送已启用，重新启动定时器
+            if self.auto_send_var.get():
+                self.stop_auto_send()
+                self.start_auto_send()
+        else:
+            messagebox.showerror("错误", "无效的发送频率")
+    
+    def update_packet_size_display(self):
+        """更新数据包大小显示"""
+        packet_size = self.protocol.get_current_packet_size()
+        mode = self.data_packet_mode.get()
+        self.packet_size_label.config(text=f"数据包大小: {packet_size} 字节 ({mode}模式)")
+    
+    def toggle_auto_send(self):
+        """切换自动发送状态"""
+        if self.auto_send_var.get():
+            if not self.is_connected:
+                messagebox.showerror("错误", "串口未连接，无法启用自动发送")
+                self.auto_send_var.set(False)
+                return
+            self.start_auto_send()
+            self.append_receive_text("自动发送已启用")
+        else:
+            self.stop_auto_send()
+            self.append_receive_text("自动发送已禁用")
+    
+    def start_auto_send(self):
+        """开始自动发送"""
+        if self.auto_send_timer is not None:
+            self.root.after_cancel(self.auto_send_timer)
+        
+        def auto_send_loop():
+            if self.auto_send_var.get() and self.is_connected:
+                # 获取当前控制值
+                switch_cmd = 1 if self.throttle_var.get() > 0.1 else 0
+                fan_rpm = self.fan_speed_var.get()
+                servo_angles = [var.get() for var in self.servo_vars]
+                
+                # 根据当前模式编码数据
+                data = self.protocol.encode_control_data(switch_cmd, fan_rpm, servo_angles)
+                if data and self.serial_initializer.send_data(data):
+                    # 更新发送统计
+                    self.send_statistics['total_sent'] += 1
+                    
+                    # 显示发送信息
+                    mode_text = "精简" if self.data_packet_mode.get() == "compact" else "完整"
+                    self.append_receive_text(f"自动发送[{mode_text}]: 开关={switch_cmd}, 风扇={fan_rpm}RPM")
+                    
+                    # 显示发送数据包格式
+                    self.display_send_data(data, switch_cmd, fan_rpm, servo_angles)
+                
+                # 安排下一次发送
+                self.auto_send_timer = self.root.after(self.send_interval, auto_send_loop)
+        
+        # 立即开始第一次发送
+        auto_send_loop()
+    
+    def stop_auto_send(self):
+        """停止自动发送"""
+        if self.auto_send_timer is not None:
+            self.root.after_cancel(self.auto_send_timer)
+            self.auto_send_timer = None
     
     def run(self):
         """运行GUI"""
