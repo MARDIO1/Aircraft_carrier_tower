@@ -5,12 +5,12 @@ class Protocol:
         # 上行数据包常量（地面站 → 制导镖）
         self.UP_HEADER = 0xAA
         self.UP_TAIL = 0xBB
-        self.UP_FRAME_SZ = 14  # header(1) + switch(1) + fan_rpm(2) + servo[4](8) + tail(1) + crc(1) = 14
+        self.UP_FRAME_SZ = 13  # header(1) + switch(1) + fan_rpm(2) + servo[4](8) + tail(1)  = 13
         
         # 下行数据包常量（制导镖 → 地面站）
         self.DOWN_HEADER = 0xCC
         self.DOWN_TAIL = 0xDD
-        self.DOWN_FRAME_SZ = 40  # header(1) + last_switch(1) + gyro[9](36) + tail(1) + crc(1) = 40
+        self.DOWN_FRAME_SZ = 39 # header(1) + last_switch(1) + gyro[9](36) + tail(1)  = 39
         
         # 数据包大小配置
         self.data_packet_mode = "full"  # "full" 或 "compact"
@@ -27,26 +27,11 @@ class Protocol:
         # 接收缓冲区
         self.receive_buffer = bytearray()
     
-    def _calculate_crc8(self, data):
-        """
-        计算CRC-8/MAXIM校验和
-        使用多项式: x^8 + x^5 + x^4 + 1 (0x8C)
-        """
-        crc = 0x00
-        for byte in data:
-            crc ^= byte
-            for _ in range(8):
-                if crc & 0x01:
-                    crc = (crc >> 1) ^ 0x8C
-                else:
-                    crc >>= 1
-                crc &= 0xFF
-        return crc
-
+  
     def encode_up_frame(self, switch_cmd, fan_rpm, servo_angles):
         """
         编码上行数据包（地面站 → 制导镖）
-        完全匹配C结构定义：header + switch_cmd + fan_rpm + servo[4] + tail + crc
+        完全匹配C结构定义：header + switch_cmd + fan_rpm + servo[4] + tail
         Args:
             switch_cmd: int 总开关 (0=关, 1=开) 
             fan_rpm: int 风扇转速 (0-1000)
@@ -66,13 +51,8 @@ class Protocol:
                                 servo_angles[3],   # 舵机4角度
                                 self.UP_TAIL)      # 0xBB
             
-            # 计算CRC（对整个数据包计算，包括包头包尾）
-            crc = self._calculate_crc8(packet_without_crc)
             
-            # 添加CRC字节
-            full_packet = packet_without_crc + bytes([crc])
-            
-            return full_packet
+            return packet_without_crc
         except Exception as e:
             print(f"编码上行数据包错误: {e}")
             return None
@@ -95,10 +75,10 @@ class Protocol:
         valid_packets = []
         
         # 处理缓冲区中的数据
-        while len(self.receive_buffer) >= 3:  # 至少需要包头+1字节数据+包尾
+        while len(self.receive_buffer) >= self.DOWN_FRAME_SZ:
             # 查找包头
             header_pos = -1
-            for i in range(len(self.receive_buffer) - 2):
+            for i in range(len(self.receive_buffer) - self.DOWN_FRAME_SZ + 1):
                 if self.receive_buffer[i] == self.DOWN_HEADER:
                     header_pos = i
                     break
@@ -128,13 +108,13 @@ class Protocol:
             else:
                 # 数据不完整，等待更多数据
                 break
-        
+                
         return valid_packets
     
     def _decode_down_frame_fast(self, data):
         """
         解码下行数据包（制导镖 → 地面站）
-        完全匹配C结构定义：header + last_switch + gyro[9] + tail + crc
+        完全匹配C结构定义：header + last_switch + gyro[9] + tail 
         Args:
             data: bytes 接收到的数据
         Returns:
@@ -144,22 +124,15 @@ class Protocol:
             return None
         
         try:
-            # 解析完整40字节数据包
-            # header(1) + last_switch(1) + gyro[9](36) + tail(1) + crc(1) = 40
-            header, last_switch, gx, gy, gz, ax, ay, az, mx, my, mz, tail, crc = \
-                struct.unpack('<B B 9f B B', data)
+            # 解析39字节数据包
+            # header(1) + last_switch(1) + gyro[9](36) + tail(1) = 39
+            # 格式：1字节header + 1字节last_switch + 9个float(每个4字节) + 1字节tail
+            header, last_switch, gx, gy, gz, ax, ay, az, mx, my, mz, tail = \
+                struct.unpack('<B B 9f B', data)
             
             # 验证包头包尾
             if header != self.DOWN_HEADER or tail != self.DOWN_TAIL:
                 return None
-            
-            # 验证CRC（可选，但推荐用于数据完整性检查）
-            data_without_crc = data[:-1]  # 去掉CRC字节
-            calculated_crc = self._calculate_crc8(data_without_crc)
-            if calculated_crc != crc:
-                print(f"CRC校验失败: 期望{calculated_crc:02X}, 实际{crc:02X}")
-                # 可以选择返回None或继续处理（根据可靠性要求）
-                # return None
             
             return {
                 'last_switch': last_switch,
@@ -172,115 +145,3 @@ class Protocol:
         except Exception as e:
             print(f"解码下行数据包错误: {e}")
             return None
-    
-    # 兼容性函数（保持现有代码正常工作）
-    def encode_ground_command(self, is_on):
-        """编码地面站开启/关闭命令（兼容现有代码）"""
-        switch_cmd = self.cmd_on if is_on else self.cmd_off
-        return self.encode_up_frame(switch_cmd, 0, [90, 90, 90, 90])
-    
-    def decode_ground_command(self, data):
-        """解码地面站开启/关闭命令（兼容现有代码）"""
-        if len(data) != 3:
-            return None
-        if data[0] != self.ground_header or data[-1] != self.ground_footer:
-            return None
-        return data[1] == self.cmd_on
-    
-    def encode_aircraft_status(self, is_on):
-        """编码航模状态（兼容现有代码）"""
-        status_byte = self.cmd_on if is_on else self.cmd_off
-        packet = bytes([self.aircraft_header, status_byte, self.aircraft_footer])
-        return packet
-    
-    def decode_aircraft_status(self, data):
-        """解码航模状态（兼容现有代码）"""
-        # 尝试解码完整下行数据包
-        packets = self.process_receive_data(data)
-        if packets:
-            return packets[0]['last_switch'] == 1
-        
-        # 回退到简单解码
-        if len(data) != 3:
-            return None
-        if data[0] != self.aircraft_header or data[-1] != self.aircraft_footer:
-            return None
-        return data[1] == self.cmd_on
-    
-    def clear_buffer(self):
-        """清空接收缓冲区"""
-        self.receive_buffer.clear()
-    
-    # 新增功能：数据包大小和频率控制
-    def set_data_packet_mode(self, mode):
-        """设置数据包模式
-        Args:
-            mode: str "full" 或 "compact"
-        """
-        if mode in ["full", "compact"]:
-            self.data_packet_mode = mode
-            return True
-        return False
-    
-    def set_send_frequency(self, frequency):
-        """设置发送频率
-        Args:
-            frequency: int 频率值 (Hz)
-        """
-        if 1 <= frequency <= 100:  # 限制在1-100Hz范围内
-            self.send_frequency = frequency
-            return True
-        return False
-    
-    def encode_compact_frame(self, switch_cmd, fan_rpm):
-        """
-        编码精简上行数据包（只包含开关和风扇转速）
-        Args:
-            switch_cmd: int 总开关 (0=关, 1=开)
-            fan_rpm: int 风扇转速 (0-1000)
-        Returns:
-            bytes: 7字节数据包
-        """
-        try:
-            # 精简数据包格式: header + switch_cmd + fan_rpm + tail + crc
-            packet_without_crc = struct.pack('<B B h B',
-                                self.UP_HEADER,    # 0xAA
-                                switch_cmd,        # 总开关
-                                fan_rpm,           # 风扇转速
-                                self.UP_TAIL)      # 0xBB
-            
-            # 计算CRC
-            crc = self._calculate_crc8(packet_without_crc)
-            
-            # 添加CRC字节
-            full_packet = packet_without_crc + bytes([crc])
-            
-            return full_packet
-        except Exception as e:
-            print(f"编码精简数据包错误: {e}")
-            return None
-    
-    def get_current_packet_size(self):
-        """获取当前数据包大小
-        Returns:
-            int: 数据包字节数
-        """
-        if self.data_packet_mode == "compact":
-            return 7  # header(1) + switch(1) + fan_rpm(2) + tail(1) + crc(1) = 7
-        else:
-            return self.UP_FRAME_SZ  # 14字节完整数据包
-    
-    def encode_control_data(self, switch_cmd, fan_rpm, servo_angles):
-        """
-        根据当前模式编码控制数据
-        Args:
-            switch_cmd: int 总开关 (0=关, 1=开)
-            fan_rpm: int 风扇转速 (0-1000)
-            servo_angles: list 4个舵机角度 [0-180, 0-180, 0-180, 0-180]
-        Returns:
-            bytes: 编码后的数据包
-        """
-        if self.data_packet_mode == "compact":
-            return self.encode_compact_frame(switch_cmd, fan_rpm)
-        else:
-            return self.encode_up_frame(switch_cmd, fan_rpm, servo_angles)
