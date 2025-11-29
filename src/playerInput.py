@@ -5,6 +5,7 @@
 
 import keyboard
 import threading
+import time
 from protocol import ProtocolData
 
 class PlayerInput:
@@ -38,29 +39,30 @@ class PlayerInput:
         
     def _input_loop(self):
         """键盘输入循环"""
+        # 设置按键事件监听器
+        keyboard.on_press(self._on_key_press)
+        
+        # 保持线程运行
         while self.running:
-            try:
-                # 检测空格键 - 总开关切换
-                if keyboard.is_pressed('space'):
-                    self._toggle_main_switch()
-                    keyboard.read_key()  # 等待按键释放
-                    
-                # 检测数字1键 - 预设状态1
-                if keyboard.is_pressed('1'):
-                    self._set_preset_state(1)
-                    keyboard.read_key()  # 等待按键释放
-                    
-                # 检测数字2键 - 预设状态2
-                if keyboard.is_pressed('2'):
-                    self._set_preset_state(2)
-                    keyboard.read_key()  # 等待按键释放
-                    
-                # 短暂休眠避免CPU占用过高
-                keyboard._msleep(50)
+            time.sleep(0.1)  # 避免CPU占用过高
                 
-            except Exception as e:
-                print(f"键盘输入捕获错误: {e}")
-                break
+    def _on_key_press(self, event):
+        """按键事件处理"""
+        if not self.running:
+            return
+            
+        try:
+            key = event.name
+            
+            if key == 'space':
+                self._toggle_main_switch()
+            elif key == '1':
+                self._set_preset_state(1)
+            elif key == '2':
+                self._set_preset_state(2)
+                
+        except Exception as e:
+            print(f"按键处理错误: {e}")
                 
     def _toggle_main_switch(self):
         """切换总开关状态"""
@@ -70,17 +72,17 @@ class PlayerInput:
     def _set_preset_state(self, preset_num):
         """设置预设状态"""
         if preset_num == 1:
-            # 预设状态1
+            # 预设状态1: 总开关开 风扇1000 舵机45 45 45 45
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1000
-            self.shared_data.servo_angles = [500, 500, 500, 500]
-            print("已设置预设状态1")
+            self.shared_data.servo_angles = [45, 45, 45, 45]
+            print("已设置预设状态1: 开关=1 风扇=1000 舵机=[45, 45, 45, 45]")
         elif preset_num == 2:
-            # 预设状态2
+            # 预设状态2: 总开关开 风扇1500 舵机60 60 60 60
             self.shared_data.main_switch = 1
-            self.shared_data.fan_speed = 2000
-            self.shared_data.servo_angles = [1000, 1000, 1000, 1000]
-            print("已设置预设状态2")
+            self.shared_data.fan_speed = 1500
+            self.shared_data.servo_angles = [60, 60, 60, 60]
+            print("已设置预设状态2: 开关=1 风扇=1500 舵机=[60, 60, 60, 60]")
         else:
             print(f"未知的预设状态: {preset_num}")
             

@@ -42,44 +42,50 @@ class TerminalGUI:
         
     def _display_loop(self):
         """GUI显示循环"""
+        # 显示初始界面
+        self._display_static_info()
+        
         while self.running:
             try:
-                # 清屏并显示三行信息
-                self._clear_screen()
-                self._display_lines()
-                time.sleep(0.1)  # 100ms刷新间隔
+                # 只更新动态信息，避免闪烁
+                self._update_dynamic_info()
+                time.sleep(0.02)  # 50Hz刷新间隔 (20ms)
                 
             except Exception as e:
                 print(f"GUI显示错误: {e}")
                 break
                 
-    def _clear_screen(self):
-        """清屏"""
-        sys.stdout.write('\033[2J\033[H')  # ANSI转义序列清屏
-        sys.stdout.flush()
+    def _display_static_info(self):
+        """显示静态信息（只显示一次）"""
+        print("航模地面站控制台")
+        print("=" * 40)
+        print("状态显示:")
+        print("操作提示:")
+        print("空格键: 切换总开关")
+        print("数字1: 预设状态1 (开关=1 风扇=1000 舵机=45)")
+        print("数字2: 预设状态2 (开关=1 风扇=1500 舵机=60)")
+        print("Ctrl+C: 退出程序")
+        print("=" * 40)
         
-    def _display_lines(self):
-        """显示三行信息"""
+    def _update_dynamic_info(self):
+        """更新动态信息（使用行内刷新）"""
         # 第一行: 上一次发送的信息
         last_sent = self.uart_sender.get_last_sent_info()
-        print(f"上一次发送: {last_sent}")
+        sys.stdout.write(f"\r上一次发送: {last_sent}" + " " * 20)
         
         # 第二行: 当前的COM口和模式
         config = self.initializer.get_current_config()
         com_port = config["com_port"] if config["com_port"] else "未连接"
         mode = "运行中" if self.running else "已停止"
-        print(f"COM口: {com_port} | 模式: {mode}")
+        sys.stdout.write(f"\nCOM口: {com_port} | 模式: {mode}" + " " * 20)
         
         # 第三行: 当前按下的键盘按键状态
         input_state = self.player_input.get_current_input()
-        print(f"当前状态: 开关={input_state['main_switch']} 风扇={input_state['fan_speed']} 舵机={input_state['servo_angles']}")
+        sys.stdout.write(f"\n当前状态: 开关={input_state['main_switch']} 风扇={input_state['fan_speed']} 舵机={input_state['servo_angles']}" + " " * 20)
         
-        # 添加操作提示
-        print("\n操作提示:")
-        print("空格键: 切换总开关")
-        print("数字1: 预设状态1")
-        print("数字2: 预设状态2")
-        print("Ctrl+C: 退出程序")
+        # 光标回到第一行开始位置
+        sys.stdout.write("\033[3A")
+        sys.stdout.flush()
         
     def get_display_info(self):
         """获取显示信息"""

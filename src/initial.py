@@ -19,27 +19,54 @@ class Initializer:
         ports = serial.tools.list_ports.comports()
         available_ports = []
         for port in ports:
-            available_ports.append(port.device)
+            available_ports.append({
+                'device': port.device,
+                'name': port.name,
+                'description': port.description,
+                'hwid': port.hwid
+            })
         return available_ports
     
-    def initialize_serial(self, com_port=None):
-        """
-        初始化串口连接
-        Args:
-            com_port: 指定的COM口，如果为None则自动选择第一个可用端口
-        """
+    def display_available_ports(self):
+        """显示所有可用COM口信息"""
         available_ports = self.list_available_ports()
         
         if not available_ports:
-            raise Exception("未找到可用的COM口")
+            print("未找到可用的COM口")
+            return []
+        
+        print("检测到以下可用COM口:")
+        for i, port in enumerate(available_ports):
+            print(f"  {i+1}. {port['device']} - {port['description']}")
+        
+        return available_ports
+    
+    def initialize_serial(self, com_port="COM14"):
+        """
+        初始化串口连接
+        Args:
+            com_port: 指定的COM口，如果为None则自动选择可用端口
+        """
+        # 首先显示所有可用端口
+        available_ports = self.display_available_ports()
+        
+        if not available_ports:
+            print("串口初始化失败: 未找到可用的COM口")
+            return False
+        
+        # 提取设备名称列表
+        port_devices = [port['device'] for port in available_ports]
         
         if com_port:
-            if com_port not in available_ports:
-                raise Exception(f"指定的COM口 {com_port} 不可用")
+            if com_port not in port_devices:
+                print(f"串口初始化失败: 指定的COM口 {com_port} 不可用")
+                print(f"可用端口: {port_devices}")
+                return False
             self.com_port = com_port
         else:
             # 自动选择第一个可用端口
-            self.com_port = available_ports[0]
+            self.com_port = port_devices[0]
+            print(f"自动选择COM口: {self.com_port}")
         
         try:
             # 初始化串口连接
@@ -55,6 +82,7 @@ class Initializer:
             return True
         except Exception as e:
             print(f"串口初始化失败: {e}")
+            print(f"请检查COM口 {self.com_port} 是否被其他程序占用或设备是否连接")
             return False
     
     def close_serial(self):
@@ -74,14 +102,14 @@ class Initializer:
     def set_preset_state(self, preset_num):
         """设置预设状态"""
         if preset_num == 1:
-            # 预设状态1
+            # 预设状态1: 总开关开 风扇1000 舵机45 45 45 45
             self.protocol_data.main_switch = 1
             self.protocol_data.fan_speed = 1000
-            self.protocol_data.servo_angles = [500, 500, 500, 500]
+            self.protocol_data.servo_angles = [45, 45, 45, 45]
         elif preset_num == 2:
-            # 预设状态2
+            # 预设状态2: 总开关开 风扇1500 舵机60 60 60 60
             self.protocol_data.main_switch = 1
-            self.protocol_data.fan_speed = 2000
-            self.protocol_data.servo_angles = [1000, 1000, 1000, 1000]
+            self.protocol_data.fan_speed = 1500
+            self.protocol_data.servo_angles = [60, 60, 60, 60]
         else:
             print(f"未知的预设状态: {preset_num}")

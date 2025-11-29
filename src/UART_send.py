@@ -61,7 +61,7 @@ class UARTSender:
                         print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
                         
                 # 控制发送频率
-                time.sleep(0.1)  # 100ms发送间隔
+                time.sleep(0.02)  # 50Hz发送间隔 (20ms)
                 
             except Exception as e:
                 print(f"串口发送错误: {e}")
