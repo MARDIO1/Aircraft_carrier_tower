@@ -26,6 +26,8 @@ def show_help():
     print("  log [行数]              - 显示最近的接收数据 (默认20行)")
     print("  log clear               - 清空日志文件")
     print("  log info                - 显示日志文件信息")
+    print("  b                       - 预设命令：开关=0（关闭）")
+    print("  a                       - 预设命令：开关=1，风扇=1500，舵机=45度")
     print("  help                    - 显示此帮助信息")
     print("  exit/quit               - 退出程序")
     print()
@@ -124,6 +126,18 @@ def main():
                 print("正在退出...")
                 controller.cleanup()
                 break
+            elif command == 'b':
+                # 执行预设命令：开关为0（关闭）
+                controller.send_control_data(switch_cmd=0)
+                print("预设命令已执行：开关=0（关闭")
+            elif command == 'a':
+                # 执行预设命令：开关=1，风扇=1500，舵机=45度
+                controller.send_control_data(
+                    switch_cmd=1,
+                    fan_rpm=1500.0,
+                    servo_angles=[45.0, 45.0, 45.0, 45.0]
+                )
+                print("预设命令已执行：开关=1，风扇=1500，舵机=45度")
                 
             elif command == 'help':
                 # 显示帮助信息
