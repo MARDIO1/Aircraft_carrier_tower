@@ -47,18 +47,17 @@ class UARTSender:
                     # 编码数据包
                     packet = encode_data(self.shared_data)
                     
-                    # 检查数据是否有变化
+                    # 获取当前数据状态
                     current_data = {
                         "main_switch": self.shared_data.main_switch,
                         "fan_speed": self.shared_data.fan_speed,
                         "servo_angles": self.shared_data.servo_angles.copy()
                     }
                     
-                    # 只有当数据变化时才发送
-                    if current_data != self.last_sent_data:
-                        self.serial_port.write(packet)
-                        self.last_sent_data = current_data
-                        print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
+                    # 无论数据是否变化都发送，保持50Hz恒定频率
+                    self.serial_port.write(packet)
+                    self.last_sent_data = current_data
+                    print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
                         
                 # 控制发送频率
                 time.sleep(0.02)  # 50Hz发送间隔 (20ms)
