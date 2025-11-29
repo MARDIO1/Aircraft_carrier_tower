@@ -1,5 +1,7 @@
 import time
 import threading
+import os
+import datetime
 from serial_thread import SerialThread
 from protocol import Protocol
 
@@ -29,6 +31,11 @@ class CommandControl:
         self.current_servo_angles = [0.0, 0.0, 0.0, 0.0]
         # 接收数据统计
         self.receive_count = 0
+        
+        # 新增日志相关属性
+        self.log_file_path = "receive_log.txt"
+        self.max_log_lines = 1000  # 最大日志行数
+        self.log_enabled = True    # 是否启用日志
         
     def list_ports(self):
         """列出所有可用的串口端口"""
@@ -82,6 +89,83 @@ class CommandControl:
         self.running = False
         print("串口连接已断开")
         
+    def _write_to_log(self, message):
+        """将消息写入日志文件"""
+        if not self.log_enabled:
+            return
+        
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"[{timestamp}] {message}\n"
+        
+            # 写入日志文件
+            with open(self.log_file_path, 'a', encoding='utf-8') as f:
+                f.write(log_entry)
+            
+            # 检查日志文件大小，如果过大则清理
+            self._manage_log_size()
+        
+        except Exception as e:
+            print(f"写入日志文件错误: {e}")
+
+    def _manage_log_size(self):
+        """管理日志文件大小，防止过大"""
+        try:
+            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        
+            # 如果超过最大行数，保留最新的部分
+            if len(lines) > self.max_log_lines:
+                with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines[-self.max_log_lines:])
+                
+        except Exception as e:
+            print(f"管理日志文件大小错误: {e}")
+
+    def show_log(self, lines=20):
+        """显示最近的日志内容"""
+        try:
+            with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+        
+            # 显示最近的指定行数
+            recent_lines = all_lines[-lines:] if lines > 0 else all_lines
+            print(f"\n最近 {len(recent_lines)} 条接收数据:")
+            print("-" * 60)
+            for line in recent_lines:
+                print(line.strip())
+            print("-" * 60)
+        
+        except FileNotFoundError:
+            print("日志文件不存在，尚未接收任何数据")
+        except Exception as e:
+            print(f"读取日志文件错误: {e}")
+
+    def clear_log(self):
+        """清空日志文件"""
+        try:
+            with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                f.write("")
+            print("日志文件已清空")
+        except Exception as e:
+            print(f"清空日志文件错误: {e}")
+
+    def show_log_info(self):
+        """显示日志文件信息"""
+        try:
+            if os.path.exists(self.log_file_path):
+                file_size = os.path.getsize(self.log_file_path)
+                with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                    line_count = len(f.readlines())
+                print(f"日志文件: {self.log_file_path}")
+                print(f"文件大小: {file_size} 字节")
+                print(f"数据行数: {line_count}")
+                print(f"最大行数: {self.max_log_lines}")
+            else:
+                print("日志文件不存在")
+        except Exception as e:
+            print(f"获取日志文件信息错误: {e}")
+
     def send_control_data(self, switch_cmd=None, fan_rpm=None, servo_angles=None):
         """发送控制数据到航模"""
         # 检查串口是否连接
@@ -115,12 +199,11 @@ class CommandControl:
             
         # 通过串口线程发送数据
         success = self.serial_thread.send_data(packet)
-        if success:
-            print(f"发送数据: 开关={self.current_switch}, 油门={self.current_fan_rpm}, 舵机={self.current_servo_angles}")
-        else:
+        if not success:
             print("发送数据失败")
-            
+    
         return success
+
         
     def start_auto_send(self, interval=0.1):
         """启动自动发送模式，按指定间隔发送控制数据"""
@@ -179,17 +262,16 @@ class CommandControl:
         try:
             parsed_data = self.protocol.process_receive_data(data)
             if parsed_data:
-                # 显示解析后的数据
-                print(f"接收数据 [{self.receive_count}]: {parsed_data}")
+                # 写入日志
+                self._write_to_log(f"接收数据 [{self.receive_count}]: {parsed_data}") 
             else:
                 # 显示原始数据（十六进制格式）
                 hex_data = data.hex().upper()
-                print(f"接收原始数据 [{self.receive_count}]: {hex_data}")
+                self._write_to_log(f"接收原始数据 [{self.receive_count}]: {hex_data}")
         except Exception as e:
-            # 显示解析错误和原始数据
             hex_data = data.hex().upper()
-            print(f"数据解析错误: {e}")
-            print(f"接收原始数据 [{self.receive_count}]: {hex_data}")
+            self._write_to_log(f"数据解析错误: {e}")
+            self._write_to_log(f"接收原始数据 [{self.receive_count}]: {hex_data}")
             
     def print_status(self):
         """打印当前状态信息"""
@@ -202,6 +284,9 @@ class CommandControl:
         print(f"    风扇转速: {self.current_fan_rpm}")
         print(f"    舵机角度: {self.current_servo_angles}")
         print(f"  接收数据包: {self.receive_count}个")
+        print(f"  日志状态: {'启用' if self.log_enabled else '禁用'}")
+        # 显示日志文件信息
+        self.show_log_info()
         
     def cleanup(self):
         """清理资源"""

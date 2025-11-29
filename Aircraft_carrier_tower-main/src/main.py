@@ -18,17 +18,45 @@ def show_help():
     print("  connect <端口> [波特率] - 连接串口 (默认115200)")
     print("  disconnect              - 断开串口连接")
     print("  set throttle <值>       - 设置油门值 (0-65535)")
-    print("  set switch <值>         - 设置总开关 (0或1)")
+    print("  set switch <值>         - 设置总开关 (0=关, 1=开, 2=特殊模式)")
     print("  set servo <角度列表>    - 设置4个舵机角度")
     print("  auto [间隔]             - 启动自动发送 (默认0.1秒)")
     print("  stop                    - 停止自动发送")
     print("  status                  - 显示当前状态")
+    print("  log [行数]              - 显示最近的接收数据 (默认20行)")
+    print("  log clear               - 清空日志文件")
+    print("  log info                - 显示日志文件信息")
     print("  help                    - 显示此帮助信息")
     print("  exit/quit               - 退出程序")
     print()
 
-def parse_set_command(controller,args):
-    """解析set命令"""
+def parse_set_command(controller, args):
+    """解析set命令和日志命令"""
+    if len(args) < 1:
+        print("用法: set <参数> <值> 或 log [选项]")
+        return
+        
+    # 处理日志命令
+    if args[0].lower() == 'log':
+        if len(args) == 1:
+            # log - 显示最近20行
+            controller.show_log(20)
+        elif args[1].lower() == 'clear':
+            # log clear - 清空日志
+            controller.clear_log()
+        elif args[1].lower() == 'info':
+            # log info - 显示日志信息
+            controller.show_log_info()
+        else:
+            # log <行数> - 显示指定行数
+            try:
+                lines = int(args[1])
+                controller.show_log(lines)
+            except ValueError:
+                print("错误：行数必须是数字")
+        return
+        
+    # 原有的set命令处理
     if len(args) < 2:
         print("用法: set <参数> <值>")
         return
@@ -48,8 +76,8 @@ def parse_set_command(controller,args):
         # 设置总开关
         try:
             switch_cmd = int(value_str)
-            if switch_cmd not in [0, 1]:
-                print("错误：开关值必须是0或1")
+            if switch_cmd not in [0, 1, 2]:
+                print("错误：开关值必须是0、1或2")
                 return
             controller.send_control_data(switch_cmd=switch_cmd)
         except ValueError:
@@ -135,6 +163,25 @@ def main():
             elif command == 'status':
                 # 显示状态
                 controller.print_status()
+                
+            elif command == 'log':
+                # 处理日志命令
+                if len(args) == 0:
+                    # log - 显示最近20行
+                    controller.show_log(20)
+                elif args[0].lower() == 'clear':
+                    # log clear - 清空日志
+                    controller.clear_log()
+                elif args[0].lower() == 'info':
+                    # log info - 显示日志信息
+                    controller.show_log_info()
+                else:
+                    # log <行数> - 显示指定行数
+                    try:
+                        lines = int(args[0])
+                        controller.show_log(lines)
+                    except ValueError:
+                        print("错误：行数必须是数字")
                 
             else:
                 print(f"未知命令: {command}")

@@ -23,6 +23,7 @@ class Protocol:
         self.aircraft_footer = self.DOWN_TAIL
         self.cmd_on = 0x01
         self.cmd_off = 0x00
+        self.cmd_unlock = 0x02
         
         # 接收缓冲区
         self.receive_buffer = bytearray()
@@ -33,29 +34,35 @@ class Protocol:
         编码上行数据包（地面站 → 制导镖）
         完全匹配C结构定义：header + switch_cmd + fan_rpm + servo[4] + tail
         Args:
-            switch_cmd: int 总开关 (0=关, 1=开) 
+            switch_cmd: int 总开关 (0=关, 1=开, 2=特殊模式) 
             fan_rpm: int 风扇转速 (0-1000)
             servo_angles: list 4个舵机角度 [0-180, 0-180, 0-180, 0-180]
         Returns:
             bytes: 14字节数据包
         """
         try:
+            # 将浮点数转换为整数以匹配struct格式
+            fan_rpm_int = int(fan_rpm)  # 转换为整数
+            servo_angles_int = [int(angle) for angle in servo_angles]  # 转换为整数列表
+            
             # 使用小端序打包数据（不包括CRC）
             packet_without_crc = struct.pack('<B B h 4h B',
                                 self.UP_HEADER,    # 0xAA
                                 switch_cmd,        # 总开关
-                                fan_rpm,           # 风扇转速
-                                servo_angles[0],   # 舵机1角度
-                                servo_angles[1],   # 舵机2角度
-                                servo_angles[2],   # 舵机3角度
-                                servo_angles[3],   # 舵机4角度
+                                fan_rpm_int,       # 风扇转速（已转换为整数）
+                                servo_angles_int[0],   # 舵机1角度（已转换为整数）
+                                servo_angles_int[1],   # 舵机2角度（已转换为整数）
+                                servo_angles_int[2],   # 舵机3角度（已转换为整数）
+                                servo_angles_int[3],   # 舵机4角度（已转换为整数）
                                 self.UP_TAIL)      # 0xBB
-            
             
             return packet_without_crc
         except Exception as e:
             print(f"编码上行数据包错误: {e}")
             return None
+
+
+
     
     def process_receive_data(self, data):
         """
