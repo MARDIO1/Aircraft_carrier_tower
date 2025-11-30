@@ -53,7 +53,7 @@ class TerminalGUI:
             try:
                 # 更新动态信息
                 self._update_dynamic_info()
-                time.sleep(0.02)  # 50Hz刷新间隔 (20ms)
+                time.sleep(0.1)  # 50Hz刷新间隔 (20ms)  降频
                 
             except Exception as e:
                 print(f"GUI显示错误: {e}")
@@ -72,24 +72,27 @@ class TerminalGUI:
         print("状态显示:")
         
     def _update_dynamic_info(self):
-        """更新动态信息（使用三行显示）"""
+        """更新动态信息（使用四行显示，包含16进制数据）"""
         # 获取所有状态信息
         last_sent = self.uart_sender.get_last_sent_info()
         config = self.initializer.get_current_config()
         com_port = config["com_port"] if config["com_port"] else "未连接"
         input_state = self.player_input.get_current_input()
+        hex_data = self.uart_sender.get_hex_data()
         
-        # 构建三行显示内容
+        # 构建四行显示内容
         line1 = f"上一次发送的信息: {last_sent}"
         line2 = f"当前COM口和模式: {com_port}"
         line3 = f"当前按键状态: 开关={input_state['main_switch']} 风扇={input_state['fan_speed']} 舵机={input_state['servo_angles']}"
+        line4 = f"16进制数据: {hex_data}"
         
-        # 使用光标移动技术更新三行
+        # 使用光标移动技术更新四行
         # 移动到第一行动态信息位置
-        sys.stdout.write(f"\r\033[10A")  # 向上移动10行到动态信息开始位置
+        sys.stdout.write(f"\r\033[11A")  # 向上移动11行到动态信息开始位置
         sys.stdout.write(f"\r\033[K{line1}\n")  # 清除行并显示第一行
         sys.stdout.write(f"\033[K{line2}\n")    # 清除行并显示第二行
-        sys.stdout.write(f"\033[K{line3}")      # 清除行并显示第三行（不换行）
+        sys.stdout.write(f"\033[K{line3}\n")    # 清除行并显示第三行
+        sys.stdout.write(f"\033[K{line4}")      # 清除行并显示第四行（不换行）
         sys.stdout.flush()
         
     def get_display_info(self):

@@ -81,7 +81,7 @@ class PlayerInput:
             # 预设状态2: 总开关开 风扇1500 舵机60 60 60 60
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1500
-            self.shared_data.servo_angles = [60, 60, 60, 60]
+            self.shared_data.servo_angles = [0, 0, 0, 0]
             print("已设置预设状态2: 开关=1 风扇=1500 舵机=[60, 60, 60, 60]")
         else:
             print(f"未知的预设状态: {preset_num}")
