@@ -10,6 +10,7 @@ from protocol import ProtocolData
 from initial import Initializer
 from playerInput import PlayerInput
 from UART_send import UARTSender
+from UART_receive import UARTReceiver
 from terminal_GUI import TerminalGUI
 
 class AircraftCarrierTower:
@@ -22,6 +23,7 @@ class AircraftCarrierTower:
         self.initializer = Initializer()
         self.player_input = PlayerInput(self.shared_data)
         self.uart_sender = None
+        self.uart_receiver = None
         self.terminal_gui = None
         
         # 运行状态
@@ -40,8 +42,11 @@ class AircraftCarrierTower:
             # 初始化串口发送器
             self.uart_sender = UARTSender(self.initializer.serial_port, self.shared_data)
             
+            # 初始化串口接收器
+            self.uart_receiver = UARTReceiver(self.initializer.serial_port, self.shared_data)
+            
             # 初始化控制台GUI
-            self.terminal_gui = TerminalGUI(self.uart_sender, self.initializer, self.player_input)
+            self.terminal_gui = TerminalGUI(self.uart_sender, self.initializer, self.player_input, self.shared_data)
             
             print("系统初始化完成")
             return True
@@ -61,6 +66,7 @@ class AircraftCarrierTower:
             # 启动各个模块
             self.player_input.start_capture()
             self.uart_sender.start_sending()
+            self.uart_receiver.start_receiving()
             self.terminal_gui.start_display()
             
             print("系统已启动，按Ctrl+C退出")
@@ -85,6 +91,8 @@ class AircraftCarrierTower:
             self.terminal_gui.stop_display()
         if self.uart_sender:
             self.uart_sender.stop_sending()
+        if self.uart_receiver:
+            self.uart_receiver.stop_receiving()
         if self.player_input:
             self.player_input.stop_capture()
         if self.initializer:
