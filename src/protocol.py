@@ -18,7 +18,7 @@ class ProtocolData:
         # 发送数据（地面站→航模）
         self.main_switch = 0  # 总开关: 0或1
         self.fan_speed = 0    # 风扇转速: int16
-        self.servo_angles = [0, 0, 0, 0]  # 4个舵机角度: int16数组
+        self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度: float32数组
         
         # 接收数据（航模→地面站）
         self.received_switch = 0  # 接收到的开关状态
@@ -36,7 +36,7 @@ class ProtocolData:
 def encode_data(data):
     """
     将数据编码为串口发送格式（地面站→航模）
-    格式: 0xAA + uint8[1]总开关 + int16[1]风扇转速 + int16[4]舵机角度 + 0xBB
+    格式: 0xAA + uint8[1]总开关 + int16[1]风扇转速 + float32[4]舵机角度 + 0xBB
     """
     packet = bytearray()
     
@@ -49,9 +49,9 @@ def encode_data(data):
     # 风扇转速 (2字节, 小端序)
     packet.extend(data.fan_speed.to_bytes(2, 'little', signed=True))
     
-    # 4个舵机角度 (各2字节, 小端序)
+    # 4个舵机角度 (各4字节, 小端序, float32)
     for angle in data.servo_angles:
-        packet.extend(angle.to_bytes(2, 'little', signed=True))
+        packet.extend(struct.pack('<f', float(angle)))
     
     # 结束字节
     packet.append(END_BYTE)
