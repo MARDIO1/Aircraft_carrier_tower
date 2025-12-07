@@ -86,59 +86,59 @@ class PlayerInput:
     def _set_preset_state(self, preset_num):
         """设置预设状态"""
         if preset_num == 1:
-            # 预设状态1: 总开关开 风扇1000 舵机45 45 45 45
+            # 预设状态1: 总开关开 风扇1000 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1000 
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态1: 开关=1 风扇=1000 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态1: 开关=1 风扇=1000 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 2:
-            # 预设状态2: 总开关开 风扇1500 舵机0 0 0 0
+            # 预设状态2: 总开关开 风扇1500 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1500
-            self.shared_data.servo_angles = [0, 0, 0, 0]
-            print("已设置预设状态2: 开关=1 风扇=1500 舵机=[0, 0, 0, 0]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态2: 开关=1 风扇=1500 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 3:
-            # 预设状态3: 总开关开 风扇1300 舵机45 45 45 45
+            # 预设状态3: 总开关开 风扇1300 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1300
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态3: 开关=1 风扇=1300 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态3: 开关=1 风扇=1300 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 4:
-            # 预设状态4: 总开关开 风扇1400 舵机45 45 45 45
-            self.shared_data.main_switch = 1
+            # 预设状态4: 总开关开 风扇1400 舵机0.0 0.0 0.0 0.0
+            self.shared_data.main_switch = 2
             self.shared_data.fan_speed = 1400
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态4: 开关=1 风扇=1400 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态4: 开关=1 风扇=1400 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 5:
-            # 预设状态5: 总开关开 风扇1600 舵机45 45 45 45
+            # 预设状态5: 总开关开 风扇1600 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1600
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态5: 开关=1 风扇=1600 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态5: 开关=1 风扇=1600 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 6:
-            # 预设状态6: 总开关开 风扇1700 舵机45 45 45 45
+            # 预设状态6: 总开关开 风扇1700 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1700
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态6: 开关=1 风扇=1700 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态6: 开关=1 风扇=1700 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 7:
-            # 预设状态7: 总开关开 风扇1800 舵机45 45 45 45
+            # 预设状态7: 总开关开 风扇1800 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1800
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态7: 开关=1 风扇=1800 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态7: 开关=1 风扇=1800 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 8:
-            # 预设状态8: 总开关开 风扇1900 舵机45 45 45 45
+            # 预设状态8: 总开关开 风扇1900 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1900
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态8: 开关=1 风扇=1900 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态8: 开关=1 风扇=1900 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 9:
-            # 预设状态9: 总开关开 风扇1990 舵机45 45 45 45
+            # 预设状态9: 总开关开 风扇1990 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 1
             self.shared_data.fan_speed = 1990
-            self.shared_data.servo_angles = [45, 45, 45, 45]
-            print("已设置预设状态9: 开关=1 风扇=1990 舵机=[45, 45, 45, 45]")
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            print("已设置预设状态9: 开关=1 风扇=1990 舵机=[0.0, 0.0, 0.0, 0.0]")
         else:
             print(f"未知的预设状态: {preset_num}")
             
