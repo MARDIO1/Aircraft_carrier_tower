@@ -106,7 +106,7 @@ class PlayerInput:
         elif preset_num == 4:
             # 预设状态4: 总开关开 风扇1400 舵机0.0 0.0 0.0 0.0
             self.shared_data.main_switch = 2
-            self.shared_data.fan_speed = 1400
+            self.shared_data.fan_speed = 1400 
             self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
             print("已设置预设状态4: 开关=1 风扇=1400 舵机=[0.0, 0.0, 0.0, 0.0]")
         elif preset_num == 5:

@@ -85,25 +85,25 @@ class TerminalGUI:
         if self.shared_data:
             # 格式化接收数据
             switch = self.shared_data.received_switch
-            acc_x = self.shared_data.received_acc_x
-            acc_y = self.shared_data.received_acc_y
-            acc_z = self.shared_data.received_acc_z
-            gyro_x = self.shared_data.received_gyro_x
-            gyro_y = self.shared_data.received_gyro_y
-            gyro_z = self.shared_data.received_gyro_z
+            #acc_x = self.shared_data.received_acc_x
+            #acc_y = self.shared_data.received_acc_y
+           # acc_z = self.shared_data.received_acc_z
+            #gyro_x = self.shared_data.received_gyro_x
+           # gyro_y = self.shared_data.received_gyro_y
+           # gyro_z = self.shared_data.received_gyro_z
             angle_roll = self.shared_data.received_angle_roll
             angle_pitch = self.shared_data.received_angle_pitch
             angle_yaw = self.shared_data.received_angle_yaw
             
             # 检查是否有有效数据（不是默认值）
             has_data = (switch != 0 or 
-                       abs(acc_x) > 0.001 or abs(acc_y) > 0.001 or abs(acc_z) > 0.001 or
-                       abs(gyro_x) > 0.001 or abs(gyro_y) > 0.001 or abs(gyro_z) > 0.001 or
+                       #abs(acc_x) > 0.001 or abs(acc_y) > 0.001 or abs(acc_z) > 0.001 or
+                       #abs(gyro_x) > 0.001 or abs(gyro_y) > 0.001 or abs(gyro_z) > 0.001 or
                        abs(angle_roll) > 0.001 or abs(angle_pitch) > 0.001 or abs(angle_yaw) > 0.001)
             
             if has_data:
                 # 格式化显示，限制小数位数
-                line4 = f"接收数据: 开关={switch} 加速度=({acc_x:.2f},{acc_y:.2f},{acc_z:.2f}) 陀螺仪=({gyro_x:.2f},{gyro_y:.2f},{gyro_z:.2f}) 角度=({angle_roll:.1f},{angle_pitch:.1f},{angle_yaw:.1f})"
+                line4 = f"接收数据: 开关={switch}  角度=({angle_roll:.1f},{angle_pitch:.1f},{angle_yaw:.1f})"
             else:
                 line4 = "接收数据: 无数据"
         else:
@@ -132,10 +132,10 @@ class TerminalGUI:
         # 获取接收数据信息
         if self.shared_data:
             switch = self.shared_data.received_switch
-            acc_x = self.shared_data.received_acc_x
-            acc_y = self.shared_data.received_acc_y
-            acc_z = self.shared_data.received_acc_z
-            received_info = f"开关={switch} 加速度=({acc_x:.2f},{acc_y:.2f},{acc_z:.2f})"
+            angle_roll = self.shared_data.received_angle_roll
+            angle_pitch = self.shared_data.received_angle_pitch
+            angle_yaw = self.shared_data.received_angle_yaw
+            received_info = f"开关={switch} 角度=({angle_roll:.2f},{angle_pitch:.2f},{angle_yaw:.2f})"
         else:
             received_info = "未连接"
         

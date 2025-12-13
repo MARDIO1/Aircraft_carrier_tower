@@ -1,4 +1,5 @@
 """
+已懂
 串口通讯协议配置
 定义地面站与航模之间的数据格式
 """
@@ -62,10 +63,10 @@ def decode_data(packet):
     """
     解码从航模接收到的数据包（航模→地面站）
     格式: 0xCC + uint8开关 + float[3]加速度 + float[3]陀螺仪 + float[3]角度 + 0xDD
-    总长度: 39字节 (1+1+12+12+12+1)
+    总长度: 39字节 (1+1+12+12+12+1)暂改为15字节
     """
     # 检查数据包长度
-    if len(packet) != 39:
+    if len(packet) != 15:
         return None
     
     # 检查起始和结束字节
@@ -80,17 +81,17 @@ def decode_data(packet):
         
         # 解析加速度数据 (3个float, 每个4字节，小端序)
         # 字节位置: 2-13 (12字节)
-        data.received_acc_x,data.received_acc_y,data.received_acc_z = struct.unpack('<fff', packet[2:14])
+        #data.received_acc_x,data.received_acc_y,data.received_acc_z = struct.unpack('<fff', packet[2:14])
         
         
         # 解析陀螺仪数据 (3个float, 每个4字节，小端序)
         # 字节位置: 14-25 (12字节)
-        data.received_gyro_x,data.received_gyro_y,data.received_gyro_z = struct.unpack('<fff', packet[14:26])
+        #data.received_gyro_x,data.received_gyro_y,data.received_gyro_z = struct.unpack('<fff', packet[14:26])
        
         
         # 解析角度数据 (3个float, 每个4字节，小端序)
         # 字节位置: 26-37 (12字节)
-        data.received_angle_roll,data.received_angle_pitch,data.received_angle_yaw = struct.unpack('<fff', packet[26:38])
+        data.received_angle_roll,data.received_angle_pitch,data.received_angle_yaw = struct.unpack('<fff', packet[2:14])
       
         
         # 更新最后接收时间

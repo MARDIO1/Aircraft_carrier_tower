@@ -70,10 +70,10 @@ class UARTReceiver:
         self.receive_buffer.extend(data)
         
         # 尝试从缓冲区中提取完整的数据包
-        while len(self.receive_buffer) >= 39:  # 数据包最小长度
+        while len(self.receive_buffer) >= 15:  # 数据包最小长度
             # 查找起始字节 0xCC
             start_idx = -1
-            for i in range(len(self.receive_buffer) - 38):  # 需要至少39字节
+            for i in range(len(self.receive_buffer) - 14):  # 需要至少39字节
                 if self.receive_buffer[i] == 0xCC:  # RECV_START_BYTE
                     start_idx = i
                     break
@@ -84,7 +84,7 @@ class UARTReceiver:
                 return
                 
             # 检查是否有完整的数据包
-            if start_idx + 39 > len(self.receive_buffer):
+            if start_idx + 15 > len(self.receive_buffer):
                 # 数据包不完整，等待更多数据
                 # 移除起始字节之前的数据
                 if start_idx > 0:
@@ -92,7 +92,7 @@ class UARTReceiver:
                 return
                 
             # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 39])
+            packet = bytes(self.receive_buffer[start_idx:start_idx + 15])
             
             # 检查结束字节
             if packet[-1] == 0xDD:  # RECV_END_BYTE
@@ -106,7 +106,7 @@ class UARTReceiver:
                     self.error_count += 1
                 
                 # 从缓冲区中移除已处理的数据包
-                self.receive_buffer = self.receive_buffer[start_idx + 39:]
+                self.receive_buffer = self.receive_buffer[start_idx + 15:]
             else:
                 # 结束字节不匹配，跳过这个起始字节
                 self.receive_buffer = self.receive_buffer[start_idx + 1:]
@@ -118,14 +118,11 @@ class UARTReceiver:
             self.shared_data.received_switch = decoded_data.received_switch
             
             # 更新加速度数据
-            self.shared_data.received_acc_x = decoded_data.received_acc_x
-            self.shared_data.received_acc_y = decoded_data.received_acc_y
-            self.shared_data.received_acc_z = decoded_data.received_acc_z
             
             # 更新陀螺仪数据
-            self.shared_data.received_gyro_x = decoded_data.received_gyro_x
-            self.shared_data.received_gyro_y = decoded_data.received_gyro_y
-            self.shared_data.received_gyro_z = decoded_data.received_gyro_z
+            #self.shared_data.received_gyro_x = decoded_data.received_gyro_x
+           # self.shared_data.received_gyro_y = decoded_data.received_gyro_y
+            #self.shared_data.received_gyro_z = decoded_data.received_gyro_z
             
             # 更新角度数据
             self.shared_data.received_angle_roll = decoded_data.received_angle_roll
@@ -155,7 +152,7 @@ class UARTReceiver:
         """获取接收数据的摘要信息"""
         return {
             "switch": self.shared_data.received_switch,
-            "acceleration": f"[{self.shared_data.received_acc_x:.2f}, {self.shared_data.received_acc_y:.2f}, {self.shared_data.received_acc_z:.2f}]",
-            "gyro": f"[{self.shared_data.received_gyro_x:.2f}, {self.shared_data.received_gyro_y:.2f}, {self.shared_data.received_gyro_z:.2f}]",
+            #"acceleration": f"[{self.shared_data.received_acc_x:.2f}, {self.shared_data.received_acc_y:.2f}, {self.shared_data.received_acc_z:.2f}]",
+           # "gyro": f"[{self.shared_data.received_gyro_x:.2f}, {self.shared_data.received_gyro_y:.2f}, {self.shared_data.received_gyro_z:.2f}]",
             "angles": f"[{self.shared_data.received_angle_roll:.2f}, {self.shared_data.received_angle_pitch:.2f}, {self.shared_data.received_angle_yaw:.2f}]"
         }
