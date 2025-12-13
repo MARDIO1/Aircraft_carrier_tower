@@ -18,7 +18,7 @@ class AircraftCarrierTower:
         """初始化地面站控制塔"""
         # 共享数据对象
         self.shared_data = ProtocolData()
-        
+        #impotant
         # 初始化各个模块
         self.initializer = Initializer()
         self.player_input = PlayerInput(self.shared_data)

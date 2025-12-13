@@ -47,7 +47,7 @@ def encode_data(data):
     packet.append(data.main_switch & 0xFF)
     
     # 风扇转速 (2字节, 小端序)
-    packet.extend(data.fan_speed.to_bytes(2, 'little', signed=True))
+    packet.extend(struct.pack('<h', data.fan_speed))  # '<h' = 有符号短整型
     
     # 4个舵机角度 (各4字节, 小端序, float32)
     for angle in data.servo_angles:
@@ -80,21 +80,18 @@ def decode_data(packet):
         
         # 解析加速度数据 (3个float, 每个4字节，小端序)
         # 字节位置: 2-13 (12字节)
-        data.received_acc_x = struct.unpack('<f', packet[2:6])[0]
-        data.received_acc_y = struct.unpack('<f', packet[6:10])[0]
-        data.received_acc_z = struct.unpack('<f', packet[10:14])[0]
+        data.received_acc_x,data.received_acc_y,data.received_acc_z = struct.unpack('<fff', packet[2:14])
+        
         
         # 解析陀螺仪数据 (3个float, 每个4字节，小端序)
         # 字节位置: 14-25 (12字节)
-        data.received_gyro_x = struct.unpack('<f', packet[14:18])[0]
-        data.received_gyro_y = struct.unpack('<f', packet[18:22])[0]
-        data.received_gyro_z = struct.unpack('<f', packet[22:26])[0]
+        data.received_gyro_x,data.received_gyro_y,data.received_gyro_z = struct.unpack('<fff', packet[14:26])
+       
         
         # 解析角度数据 (3个float, 每个4字节，小端序)
         # 字节位置: 26-37 (12字节)
-        data.received_angle_roll = struct.unpack('<f', packet[26:30])[0]
-        data.received_angle_pitch = struct.unpack('<f', packet[30:34])[0]
-        data.received_angle_yaw = struct.unpack('<f', packet[34:38])[0]
+        data.received_angle_roll,data.received_angle_pitch,data.received_angle_yaw = struct.unpack('<fff', packet[26:38])
+      
         
         # 更新最后接收时间
         data.last_received_time = time.time()
