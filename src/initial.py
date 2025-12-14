@@ -99,17 +99,4 @@ class Initializer:
             "protocol_data": self.protocol_data
         }
     
-    def set_preset_state(self, preset_num):
-        """设置预设状态"""
-        if preset_num == 1:
-            # 预设状态1: 总开关开 风扇1000 舵机45 45 45 45
-            self.protocol_data.main_switch = 1
-            self.protocol_data.fan_speed = 1000
-            self.protocol_data.servo_angles = [45, 45, 45, 45]
-        elif preset_num == 2:
-            # 预设状态2: 总开关开 风扇1500 舵机60 60 60 60
-            self.protocol_data.main_switch = 1
-            self.protocol_data.fan_speed = 1500
-            self.protocol_data.servo_angles = [60, 60, 60, 60]
-        else:
-            print(f"未知的预设状态: {preset_num}")
+    
