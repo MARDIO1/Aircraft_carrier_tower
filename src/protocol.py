@@ -1,170 +1,475 @@
 """
-已懂
-串口通讯协议配置
-定义地面站与航模之间的数据格式
+串口通讯协议配置 - 状态机版本
+定义地面站与航模之间的数据格式，支持状态机架构
 """
 
 import struct
 import time
+from enum import Enum
+from typing import Optional, List, Tuple, Dict, Any
 
-# 协议常量
-START_BYTE = 0xAA  # 发送数据起始字节
-END_BYTE = 0xBB    # 发送数据结束字节
-RECV_START_BYTE = 0xCC  # 接收数据起始字节
-RECV_END_BYTE = 0xDD    # 接收数据结束字节
-PID_START_BYTE = 0xEE
-PID_END_BYTE = 0xFF
+# ==================== 状态机定义 ====================
 
-# 数据结构定义
-class ProtocolData:
-    def __init__(self):
-        # 发送数据（地面站→航模）
-        self.main_switch = 0  # 总开关: 0或1
-        self.fan_speed = 0    # 风扇转速: int16
-        self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度: float32数组
+class MainState(Enum):
+    """主状态枚举"""
+    STOP = 0x00      # 停止状态
+    AUTO = 0x01      # 自动控制
+    TOWER = 0x02     # 塔台控制
+    TUNING = 0x03    # 调参模式
+
+class SubState(Enum):
+    """子状态枚举（仅用于TUNING模式）"""
+    SERVO = 0xA1     # 舵机调参
+    PID = 0xA2       # PID调参
+    JACOBIAN = 0xA3  # 雅可比矩阵调参
+
+# ==================== 状态转换验证 ====================
+
+class StateTransitionValidator:
+    """状态转换验证器"""
+    
+    @staticmethod
+    def can_transition(from_state: MainState, to_state: MainState) -> bool:
+        """
+        验证主状态转换是否允许
         
-        #新增模式
-        self.current_mode ='RUN' #有运行，停止和调参三种模式tuning
-        self.tuning_active=False
-        self.selected_pid=0 #这里对应的是pid类型索引种类目前是roll，pitch和右后左后左前右前
-        self.selected_param=0 #当前选中的参数索引（0=kp,1=ki,2=kd,3=积分限幅，4=输出正限幅，5=积分负限幅
-
-        self.pid_param=[
-            #姿态坏：roll,pitch,yaw,  yaw还没实现
-            [0.1, 0.0, 0.0, 0.0, 5.0, -5.0],  #roll
-            [0.1, 0.0, 0.0, 0.0 ,5.0, -5.0],  #pitch
-            #[1.0, 0.0, 0.0, 0.0 ,5.0,-5.0],  #yaw
-            #舵面环:右后br，右前bl，左前fl，左后fr
-            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],#br
-            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],#bl
-            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],#fl
-            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],#fr
-        ]
-
-        #pid名称映射（用于显示）
-        self.pid_name = [
-            "姿态-横滚",   #0
-            "姿态-俯仰",   #1
-            "舵面-右后",   #2
-            "舵面-左后",   #3
-            "舵面-左前",   #4
-            "舵面-右前",   #5
-        ]
-        #参数名称映射
-        self.param_names = ["kp","ki","kd","积分限幅","正输出限幅","负输出限幅"]
-
-        # 接收数据（航模→地面站）
-        self.received_switch = 0  # 接收到的开关状态
-        self.received_acc_x = 0.0  # 加速度 X (m/s²)
-        self.received_acc_y = 0.0  # 加速度 Y (m/s²)
-        self.received_acc_z = 0.0  # 加速度 Z (m/s²)
-        self.received_gyro_x   = 0.0  # 陀螺仪 X (rad/s)
-        self.received_gyro_y = 0.0  # 陀螺仪 Y (rad/s)
-        self.received_gyro_z = 0.0  # 陀螺仪 Z (rad/s)
-        self.received_angle_roll = 0.0   # 角度 Roll
-        self.received_angle_pitch = 0.0  # 角度 Pitch
-        self.received_angle_yaw = 0.0    # 角度 Yaw
-        self.last_received_time = None  # 最后接收时间
-
-def pid_encode_data(data):
-    """
-    格式：0xEE + uint8[1]种类索引 self.selected_pid +uint8[1]名称索引self.selected_param +float32[1]5x6中的一个value +0xFF
-    """
-    if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
-        print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
-        return None
-    if data.selected_param < 0 or data.selected_param >= len(data.pid_param[0]):
-        print(f"错误：参数索引{data.selected_param}超出范围(0-{len(data.pid_param[0])-1})")
-        return None
-    packet = bytearray()
-
-    #帧头
-    packet.append(PID_START_BYTE)
-
-    #种类索引（1字节）0~1 姿态rpy 2~5舵面
-    packet.append(data.selected_pid & 0xFF)
+        规则：
+        1. 所有状态都可以切换到STOP
+        2. 只能从STOP切换到TUNING
+        3. TUNING可以切换到所有状态
+        4. AUTO和TOWER之间可以互相切换
+        """
+        if to_state == MainState.STOP:
+            return True  # 所有状态都可以切换到STOP
+        
+        if from_state == MainState.STOP:
+            return True  # STOP可以切换到任何状态
+        
+        if from_state == MainState.TUNING:
+            return True  # TUNING可以切换到任何状态
+        
+        # AUTO和TOWER之间可以互相切换
+        if from_state in [MainState.AUTO, MainState.TOWER] and to_state in [MainState.AUTO, MainState.TOWER]:
+            return True
+        
+        return False
     
-    #名称索引（1字节）
-    packet.append(data.selected_param & 0xFF)
+    @staticmethod
+    def validate_transition(from_state: MainState, to_state: MainState) -> bool:
+        """验证并执行状态转换"""
+        if StateTransitionValidator.can_transition(from_state, to_state):
+            return True
+        else:
+            print(f"状态转换错误: 无法从 {from_state.name} 切换到 {to_state.name}")
+            return False
 
-    #选中pid的6个参数中其中一个（4字节）
-    param_value = data.pid_param[data.selected_pid][data.selected_param]
-    packet.extend(struct.pack('<f',float(param_value)))
+# ==================== 编码器基类 ====================
+
+class EncoderBase:
+    """编码器基类"""
     
-    #帧尾
-    packet.append(PID_END_BYTE)
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码数据，返回字节数组或None"""
+        raise NotImplementedError("子类必须实现encode方法")
+    
+    def get_packet_length(self) -> int:
+        """返回数据包长度"""
+        raise NotImplementedError("子类必须实现get_packet_length方法")
 
-    return packet
-            
-def encode_data(data):
-    """
-    将数据编码为串口发送格式（地面站→航模）
-    格式: 0xAA + uint8[1]总开关 + int16[1]风扇转速 + float32[4]舵机角度 + 0xBB
-    """
-    if data.tuning_active and data.current_mode == 'tuning':
-        return pid_encode_data(data)
-    else:
+# ==================== 具体编码器实现 ====================
+
+class StopEncoder(EncoderBase):
+    """STOP状态编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码STOP状态数据：0xAA + 0x00 + 0xBB (3字节)"""
         packet = bytearray()
-    
-        # 起始字节
-        packet.append(START_BYTE)
-    
-        # 总开关 (1字节)
-        packet.append(data.main_switch & 0xFF)
-    
-        # 风扇转速 (2字节, 小端序)
-        packet.extend(struct.pack('<h', data.fan_speed))  # '<h' = 有符号短整型
-    
-        # 4个舵机角度 (各4字节, 小端序, float32)
-        for angle in data.servo_angles:
-            packet.extend(struct.pack('<f', float(angle)))
-    
-        # 结束字节
-        packet.append(END_BYTE)
-    
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0x00)  # STOP状态
+        packet.append(0xBB)  # END_BYTE
         return packet
     
+    def get_packet_length(self) -> int:
+        return 3
 
-def decode_data(packet):
+class AutoEncoder(EncoderBase):
+    """AUTO状态编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码AUTO状态数据：0xAA + uint8[1] + int16[1] + float32[4] + 0xBB (21字节)"""
+        packet = bytearray()
+        packet.append(0xAA)  # START_BYTE
+        packet.append(data.main_switch & 0xFF)
+        packet.extend(struct.pack('<h', data.fan_speed))
+        
+        for angle in data.servo_angles:
+            packet.extend(struct.pack('<f', float(angle)))
+        
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 21
+
+class TowerEncoder(EncoderBase):
+    """TOWER状态编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码TOWER状态数据：0xAA + uint8[1] + int16[1] + float32[4] + 0xBB (21字节)"""
+        packet = bytearray()
+        packet.append(0xAA)  # START_BYTE
+        packet.append(data.main_switch & 0xFF)
+        packet.extend(struct.pack('<h', data.fan_speed))
+        
+        for angle in data.servo_angles:
+            packet.extend(struct.pack('<f', float(angle)))
+        
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 21
+
+class ServoEncoder(EncoderBase):
+    """SERVO调参编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码SERVO调参数据：0xA1 + 0xAA + 0xA1 + float[4] + 0xBB (19字节)"""
+        packet = bytearray()
+        packet.append(0xA1)  # SERVO标记
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0xA1)  # SERVO子状态
+        
+        for angle in data.servo_angles:
+            packet.extend(struct.pack('<f', float(angle)))
+        
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 19
+
+class PIDEncoder(EncoderBase):
+    """PID调参编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码PID调参数据：0xA2 + 0xAA + 0xA2 + pid_index + float[6] + 0xBB"""
+        if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
+            print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
+            return None
+        
+        packet = bytearray()
+        packet.append(0xA2)  # PID标记
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0xA2)  # PID子状态
+        packet.append(data.selected_pid & 0xFF)  # PID索引
+        
+        # 发送选中的PID参数组（6个参数）
+        for param_value in data.pid_param[data.selected_pid]:
+            packet.extend(struct.pack('<f', float(param_value)))
+        
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 1 + 1 + 1 + 1 + 6*4 + 1  # 0xA2 + 0xAA + 0xA2 + pid_index + 6*float + 0xBB
+
+class JacobianEncoder(EncoderBase):
+    """Jacobian调参编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码Jacobian调参数据：0xA3 + 0xAA + float[3][4] + 0xBB"""
+        packet = bytearray()
+        packet.append(0xA3)  # JACOBIAN标记
+        packet.append(0xAA)  # START_BYTE
+        
+        # 发送3x4矩阵
+        for row in data.jacobian_matrix:
+            for value in row:
+                packet.extend(struct.pack('<f', float(value)))
+        
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 1 + 1 + 3*4*4 + 1  # 0xA3 + 0xAA + 12*float + 0xBB
+
+# ==================== 编码器工厂 ====================
+
+class EncoderFactory:
+    """编码器工厂，根据状态创建对应的编码器"""
+    
+    _encoders = {
+        MainState.STOP: StopEncoder(),
+        MainState.AUTO: AutoEncoder(),
+        MainState.TOWER: TowerEncoder(),
+        SubState.SERVO: ServoEncoder(),
+        SubState.PID: PIDEncoder(),
+        SubState.JACOBIAN: JacobianEncoder(),
+    }
+    
+    @staticmethod
+    def get_encoder(state: Any) -> Optional[EncoderBase]:
+        """获取状态对应的编码器"""
+        return EncoderFactory._encoders.get(state)
+
+# ==================== 协议数据结构 ====================
+
+class ProtocolData:
+    """协议数据结构，线程间共享"""
+    
+    def __init__(self):
+        # 主状态和子状态
+        self.main_state = MainState.STOP
+        self.sub_state = SubState.SERVO
+        
+        # 控制参数
+        self.main_switch = 0  # 总开关: 0=STOP, 1=AUTO, 2=TOWER
+        self.fan_speed = 0    # 风扇转速
+        self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度
+        
+        # 调参参数
+        self.selected_pid = 0  # 当前选中的PID索引
+        self.selected_param = 0  # 当前选中的参数索引
+        self.pid_param = [
+            # 内环主翼，内环尾翼
+            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],  # 内环主翼
+            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],  # 内环尾翼
+            # 姿态环：roll, pitch, yaw
+            [0.1, 0.0, 0.0, 0.0, 5.0, -5.0],    # roll
+            [0.1, 0.0, 0.0, 0.0, 5.0, -5.0],    # pitch
+            [1.0, 0.0, 0.0, 0.0, 5.0, -5.0],    # yaw
+            # 外环
+            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],  # 外环方向yaw
+            [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],  # 外环高度
+        ]
+        
+        # PID名称映射
+        self.pid_name = [
+            "内环主翼",      # 0
+            "内环尾翼",      # 1
+            "姿态环-roll",   # 2
+            "姿态环-pitch",  # 3
+            "姿态环-yaw",    # 4
+            "外环-yaw",      # 5
+            "外环-高度",     # 6
+        ]
+        
+        # 参数名称映射
+        self.param_names = ["kp", "ki", "kd", "积分限幅", "正输出限幅", "负输出限幅"]
+        
+        # Jacobian矩阵
+        self.jacobian_matrix = [
+            [0.0, 0.0, 0.0, 0.0],  # 第1行
+            [0.0, 0.0, 0.0, 0.0],  # 第2行
+            [0.0, 0.0, 0.0, 0.0]   # 第3行
+        ]
+        
+        # 导航状态
+        self.nav_row = 0  # 当前导航行
+        self.nav_col = 0  # 当前导航列
+        self.nav_confirm = False  # 是否已确认
+        
+        # 接收数据
+        self.received_switch = 0
+        self.received_angle_roll = 0.0
+        self.received_angle_pitch = 0.0
+        self.received_angle_yaw = 0.0
+        self.last_received_time = None
+    
+    def set_main_state(self, new_state: MainState) -> bool:
+        """设置主状态，验证转换规则"""
+        if StateTransitionValidator.validate_transition(self.main_state, new_state):
+            self.main_state = new_state
+            return True
+        return False
+    
+    def set_sub_state(self, new_state: SubState) -> None:
+        """设置子状态（仅用于TUNING模式）"""
+        if self.main_state == MainState.TUNING:
+            self.sub_state = new_state
+    
+    def get_current_encoder(self) -> Optional[EncoderBase]:
+        """获取当前状态对应的编码器"""
+        if self.main_state == MainState.TUNING:
+            return EncoderFactory.get_encoder(self.sub_state)
+        else:
+            return EncoderFactory.get_encoder(self.main_state)
+
+# ==================== 向后兼容函数 ====================
+
+def encode_data(data: ProtocolData) -> Optional[bytearray]:
     """
-    解码从航模接收到的数据包（航模→地面站）
-    格式: 0xCC + uint8开关 + float[3]加速度 + float[3]陀螺仪 + float[3]角度 + 0xDD
-    总长度: 39字节 (1+1+12+12+12+1)暂改为15字节
+    向后兼容的编码函数
+    使用状态机架构编码数据
     """
-    # 检查数据包长度
+    encoder = data.get_current_encoder()
+    if encoder:
+        return encoder.encode(data)
+    return None
+
+def pid_encode_data(data: ProtocolData) -> Optional[bytearray]:
+    """
+    向后兼容的PID编码函数
+    专门用于PID调参模式
+    """
+    if data.main_state == MainState.TUNING and data.sub_state == SubState.PID:
+        encoder = EncoderFactory.get_encoder(SubState.PID)
+        if encoder:
+            return encoder.encode(data)
+    return None
+
+def decode_data(packet: bytearray) -> Optional[ProtocolData]:
+    """
+    解码从航模接收到的数据包
+    格式: 0xCC + uint8开关 + float[3]角度 + 0xDD (15字节)
+    """
     if len(packet) != 15:
         return None
     
-    # 检查起始和结束字节
-    if packet[0] != RECV_START_BYTE or packet[-1] != RECV_END_BYTE:
+    if packet[0] != 0xCC or packet[-1] != 0xDD:
         return None
     
     data = ProtocolData()
     
     try:
-        # 解析开关状态 (第1字节)
         data.received_switch = packet[1]
-        
-        # 解析加速度数据 (3个float, 每个4字节，小端序)
-        # 字节位置: 2-13 (12字节)
-        #data.received_acc_x,data.received_acc_y,data.received_acc_z = struct.unpack('<fff', packet[2:14])
-        
-        
-        # 解析陀螺仪数据 (3个float, 每个4字节，小端序)
-        # 字节位置: 14-25 (12字节)
-        #data.received_gyro_x,data.received_gyro_y,data.received_gyro_z = struct.unpack('<fff', packet[14:26])
-       
-        
-        # 解析角度数据 (3个float, 每个4字节，小端序)
-        # 字节位置: 26-37 (12字节)
-        data.received_angle_roll,data.received_angle_pitch,data.received_angle_yaw = struct.unpack('<fff', packet[2:14])
-      
-        
-        # 更新最后接收时间
+        data.received_angle_roll, data.received_angle_pitch, data.received_angle_yaw = struct.unpack('<fff', packet[2:14])
         data.last_received_time = time.time()
-        
         return data
-        
     except Exception as e:
         print(f"数据解码错误: {e}")
         return None
+
+# ==================== 状态机管理类 ====================
+
+class StateMachineManager:
+    """状态机管理器"""
+    
+    def __init__(self, protocol_data: ProtocolData):
+        self.data = protocol_data
+        
+        # 导航配置
+        self.nav_config = {
+            MainState.AUTO: {
+                'rows': 2,  # 行数：状态行 + 参数行
+                'cols': 4,  # 列数：开关、风扇、舵机1-4
+                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4']
+            },
+            MainState.TOWER: {
+                'rows': 2,
+                'cols': 4,
+                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4']
+            },
+            MainState.TUNING: {
+                'rows': 3,  # 行数：子模式选择 + 参数选择 + 数值输入
+                'cols': 1,  # 列数：一维数组
+                'labels': ['舵机调参', 'PID调参', 'Jacobian调参']
+            }
+        }
+    
+    def get_nav_info(self) -> Dict[str, Any]:
+        """获取当前导航信息"""
+        if self.data.main_state not in self.nav_config:
+            return {'rows': 0, 'cols': 0, 'labels': [], 'row': 0, 'col': 0}
+        
+        config = self.nav_config[self.data.main_state]
+        return {
+            'rows': config['rows'],
+            'cols': config['cols'],
+            'labels': config['labels'],
+            'row': self.data.nav_row,
+            'col': self.data.nav_col,
+            'confirm': self.data.nav_confirm
+        }
+    
+    def navigate_up(self) -> None:
+        """向上导航"""
+        if self.data.main_state in self.nav_config:
+            config = self.nav_config[self.data.main_state]
+            if self.data.nav_row > 0:
+                self.data.nav_row -= 1
+    
+    def navigate_down(self) -> None:
+        """向下导航"""
+        if self.data.main_state in self.nav_config:
+            config = self.nav_config[self.data.main_state]
+            if self.data.nav_row < config['rows'] - 1:
+                self.data.nav_row += 1
+    
+    def navigate_left(self) -> None:
+        """向左导航"""
+        if self.data.main_state in self.nav_config:
+            config = self.nav_config[self.data.main_state]
+            if self.data.nav_col > 0:
+                self.data.nav_col -= 1
+    
+    def navigate_right(self) -> None:
+        """向右导航"""
+        if self.data.main_state in self.nav_config:
+            config = self.nav_config[self.data.main_state]
+            if self.data.nav_col < config['cols'] - 1:
+                self.data.nav_col += 1
+    
+    def toggle_confirm(self) -> None:
+        """切换确认状态"""
+        self.data.nav_confirm = not self.data.nav_confirm
+    
+    def handle_enter(self) -> bool:
+        """处理Enter键，返回是否状态改变"""
+        if self.data.main_state == MainState.TUNING:
+            # 在TUNING模式下，Enter用于选择子模式
+            if self.data.nav_row == 0:
+                self.data.set_sub_state(SubState.SERVO)
+            elif self.data.nav_row == 1:
+                self.data.set_sub_state(SubState.PID)
+            elif self.data.nav_row == 2:
+                self.data.set_sub_state(SubState.JACOBIAN)
+            return True
+        else:
+            # 在其他模式下，Enter用于确认导航位置
+            self.toggle_confirm()
+            return False
+    
+    def handle_number_input(self, number: int) -> None:
+        """处理数字输入"""
+        if self.data.main_state == MainState.TUNING:
+            if self.data.sub_state == SubState.PID:
+                # 在PID调参模式下，数字用于选择参数
+                if 0 <= number < len(self.data.pid_param[0]):
+                    self.data.selected_param = number
+            elif self.data.sub_state == SubState.JACOBIAN:
+                # 在Jacobian调参模式下，数字用于输入矩阵值
+                row = self.data.nav_row
+                col = self.data.nav_col
+                if 0 <= row < 3 and 0 <= col < 4:
+                    self.data.jacobian_matrix[row][col] = float(number)
+        else:
+            # 在其他模式下，数字用于设置参数值
+            if self.data.nav_col == 0:  # 开关
+                self.data.main_switch = number
+            elif self.data.nav_col == 1:  # 风扇
+                self.data.fan_speed = number
+            elif 2 <= self.data.nav_col <= 5:  # 舵机
+                servo_index = self.data.nav_col - 2
+                self.data.servo_angles[servo_index] = float(number)
+    
+    def get_current_selection(self) -> str:
+        """获取当前选择的项目描述"""
+        if self.data.main_state not in self.nav_config:
+            return "无导航"
+        
+        config = self.nav_config[self.data.main_state]
+        if self.data.main_state == MainState.TUNING:
+            if self.data.nav_row == 0:
+                return "舵机调参模式"
+            elif self.data.nav_row == 1:
+                return f"PID调参: {self.data.pid_name[self.data.selected_pid]}"
+            elif self.data.nav_row == 2:
+                return f"Jacobian调参: 行{self.data.nav_row},列{self.data.nav_col}"
+        else:
+            label_index = self.data.nav_row * config['cols'] + self.data.nav_col
+            if label_index < len(config['labels']):
+                return config['labels'][label_index]
+        
+        return "未知选择"

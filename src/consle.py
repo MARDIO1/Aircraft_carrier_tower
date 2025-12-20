@@ -111,20 +111,33 @@ class Consle:
         stdscr.refresh()
 
     def _draw_status_line(self,stdscr,row):
-        """第一行"""
+        """第一行：显示主状态和导航信息"""
         if not self.shared_data:
             stdscr.addstr(row,0,"模式：--- 开关：--- 风扇：--- 舵机：---")
             return
         
-        mode = self.shared_data.current_mode
-        if mode == 'RUN':
-            mode_text = "模式:RUN"
-        elif mode == 'STOP':
+        # 获取主状态
+        main_state = self.shared_data.main_state
+        if main_state == 0:
             mode_text = "模式:STOP"
-        elif mode == 'tuning':
-            mode_text = "模式:TUNE"
+        elif main_state == 1:
+            mode_text = "模式:AUTO"
+        elif main_state == 2:
+            mode_text = "模式:TOWER"
+        elif main_state == 3:
+            mode_text = "模式:TUNING"
         else:
-            mode_text = f"模式{mode}"
+            mode_text = f"模式:{main_state}"
+        
+        # 获取子状态（如果处于TUNING模式）
+        if main_state == 3:
+            sub_state = self.shared_data.sub_state
+            if sub_state == 0xA1:
+                mode_text += "(SERVO)"
+            elif sub_state == 0xA2:
+                mode_text += "(PID)"
+            elif sub_state == 0xA3:
+                mode_text += "(JACOBIAN)"
         
         switch = self.shared_data.main_switch
         switch_text = "开关:ON" if switch == 1 else "开关:OFF"
@@ -134,32 +147,39 @@ class Consle:
         servo_str = ','.join([f"{angle:.1f}" for angle in self.shared_data.servo_angles])
         servo_text = f"舵机:[{servo_str}]"
 
-        line = f"{mode_text} {switch_text} {fan_text} {servo_text}"
+        # 添加导航信息
+        nav_row = self.shared_data.nav_row
+        nav_col = self.shared_data.nav_col
+        nav_text = f"导航:[{nav_row},{nav_col}]"
+        
+        line = f"{mode_text} {switch_text} {fan_text} {servo_text} {nav_text}"
          
-        self._check_status_changes(mode, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
+        self._check_status_changes(main_state, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
 
         stdscr.addstr(row, 0, line)
-    def _check_status_changes(self, mode, switch, fan, servo):
+    def _check_status_changes(self, main_state, switch, fan, servo):
         """检测状态并记录"""
         current_servo_str = ','.join([f"{angle:.1f}" for angle in servo])
 
-        if(mode != self.last_mode or
+        if(main_state != self.last_mode or
            switch != self.last_switch or
            fan != self.last_fan or
            current_servo_str != self.last_servo):
-            if mode != self.last_mode and self.last_mode is not None:
-                if mode == 'RUN':
-                    self.add_message("运行模式")
-                elif mode == 'STOP':
+            if main_state != self.last_mode and self.last_mode is not None:
+                if main_state == 0:
                     self.add_message("停止模式")
-                elif mode == 'tuning':
+                elif main_state == 1:
+                    self.add_message("自动模式")
+                elif main_state == 2:
+                    self.add_message("塔楼模式")
+                elif main_state == 3:
                     self.add_message("调参模式")
                     
             if switch != self.last_switch and self.last_switch is not None:
                 self.add_message(f"开关:{'ON' if switch == 1 else 'OFF'}")
 
             #更新上次状态
-            self.last_mode = mode
+            self.last_mode = main_state
             self.last_switch = switch
             self.last_fan = fan
             self.last_servo = current_servo_str
@@ -197,40 +217,97 @@ class Consle:
             stdscr.addstr(row, 0, "接收:无数据")
     
     def _draw_tuning_line(self,stdscr,row):
-        """第四行仅调参模式显示"""
+        """第四行：调参模式显示和导航信息"""
         if not self.shared_data:
             return
         
-        if(self.shared_data.current_mode == 'tuning' and self.shared_data.tuning_active):
-            pid_idx = self.shared_data.selected_pid
-            param_idx = self.shared_data.selected_param
-
-            if (pid_idx < len(self.shared_data.pid_name) and 
-                param_idx < len(self.shared_data.param_names)):
-
-                pid_name = self.shared_data.pid_name[pid_idx]
-                param_name = self.shared_data.param_names[param_idx]
-                param_value = self.shared_data.pid_param[pid_idx][param_idx] 
-
-                input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
-                
-                line = f"调参:{pid_name}.{param_name}={param_value:.3f}"
-                if input_buffer:
-                    line += f"[输入]:{input_buffer}"
-
-                _, width = stdscr.getmaxyx()
-                if len(line) > width - 1:
-                    line = line[:width-1]
+        # 只在TUNING模式下显示
+        if self.shared_data.main_state == 3:
+            sub_state = self.shared_data.sub_state
+            nav_row = self.shared_data.nav_row
+            nav_col = self.shared_data.nav_col
+            
+            if sub_state == 0xA1:  # SERVO
+                # 显示舵机调参信息
+                if nav_row < len(self.shared_data.servo_angles):
+                    servo_idx = nav_row
+                    servo_value = self.shared_data.servo_angles[servo_idx]
+                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
                     
-                stdscr.addstr(row,0,line)
-
-                if input_buffer != self.last_input_buffer:
-                        self.add_message(f"输入:{input_buffer}")
+                    line = f"舵机[{servo_idx}]:{servo_value:.1f}"
+                    if input_buffer:
+                        line += f" [输入:{input_buffer}]"
+                    
+                    _, width = stdscr.getmaxyx()
+                    if len(line) > width - 1:
+                        line = line[:width-1]
+                    
+                    stdscr.addstr(row,0,line)
+                    
+                    if input_buffer != self.last_input_buffer:
+                        self.add_message(f"舵机{servo_idx}输入:{input_buffer}")
                         self.last_input_buffer = input_buffer
-                    
                         
+            elif sub_state == 0xA2:  # PID
+                # 显示PID调参信息
+                pid_idx = nav_row
+                param_idx = nav_col
+                
+                if (pid_idx < len(self.shared_data.pid_name) and 
+                    param_idx < len(self.shared_data.param_names)):
+                    
+                    pid_name = self.shared_data.pid_name[pid_idx]
+                    param_name = self.shared_data.param_names[param_idx]
+                    param_value = self.shared_data.pid_param[pid_idx][param_idx]
+                    
+                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
+                    
+                    line = f"PID:{pid_name}.{param_name}={param_value:.3f}"
+                    if input_buffer:
+                        line += f" [输入:{input_buffer}]"
+                    
+                    _, width = stdscr.getmaxyx()
+                    if len(line) > width - 1:
+                        line = line[:width-1]
+                    
+                    stdscr.addstr(row,0,line)
+                    
+                    if input_buffer != self.last_input_buffer:
+                        self.add_message(f"PID{pid_name}.{param_name}输入:{input_buffer}")
+                        self.last_input_buffer = input_buffer
+                        
+            elif sub_state == 0xA3:  # JACOBIAN
+                # 显示Jacobian调参信息
+                row_idx = nav_row
+                col_idx = nav_col
+                
+                if (row_idx < 3 and col_idx < 4):
+                    jacobian_value = self.shared_data.jacobian_matrix[row_idx][col_idx]
+                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
+                    
+                    line = f"J[{row_idx},{col_idx}]:{jacobian_value:.3f}"
+                    if input_buffer:
+                        line += f" [输入:{input_buffer}]"
+                    
+                    _, width = stdscr.getmaxyx()
+                    if len(line) > width - 1:
+                        line = line[:width-1]
+                    
+                    stdscr.addstr(row,0,line)
+                    
+                    if input_buffer != self.last_input_buffer:
+                        self.add_message(f"J[{row_idx},{col_idx}]输入:{input_buffer}")
+                        self.last_input_buffer = input_buffer
+            else:
+                # 显示导航信息
+                line = f"导航:行={nav_row},列={nav_col}"
+                stdscr.addstr(row,0,line)
         else:
-            pass
+            # 非TUNING模式显示导航提示
+            nav_row = self.shared_data.nav_row
+            nav_col = self.shared_data.nav_col
+            line = f"导航:行={nav_row},列={nav_col} (上下左右导航,Enter确认)"
+            stdscr.addstr(row,0,line)
 
     def _draw_message_line(self, stdscr, row):
         """第五行"""
@@ -292,10 +369,3 @@ class Consle:
             "current_state": current_state,
             "received_data": received_info
         }
-
-        
-        
-                
-
-            
-    

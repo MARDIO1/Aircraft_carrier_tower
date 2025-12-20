@@ -12,9 +12,9 @@ from playerInput import PlayerInput
 from UART_send import UARTSender
 from UART_receive import UARTReceiver
 from consle import Consle
-import sys
-sys.stdout = open('nul', 'w')  # Windows系统
-sys.stderr = open('nul', 'w')  # Windows系统
+# import sys
+# sys.stdout = open('nul', 'w')  # Windows系统 - 已禁用，以便查看输出
+# sys.stderr = open('nul', 'w')  # Windows系统 - 已禁用，以便查看输出
 
 
 class AircraftCarrierTower:
