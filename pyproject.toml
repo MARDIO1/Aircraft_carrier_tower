@@ -8,4 +8,5 @@ dependencies = [
     "keyboard>=0.13.5",
     "pyserial>=3.5",
     "serial>=0.0.97",
+    "windows-curses>=2.4.1",
 ]

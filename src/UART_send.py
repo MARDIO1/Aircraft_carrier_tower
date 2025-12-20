@@ -57,7 +57,7 @@ class UARTSender:
                     # 无论数据是否变化都发送，保持50Hz恒定频率
                     self.serial_port.write(packet)
                     self.last_sent_data = current_data
-                    print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
+                    #print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
                         
                 # 控制发送频率
                 time.sleep(0.02)  # 50Hz发送间隔 (20ms)

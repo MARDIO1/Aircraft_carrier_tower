@@ -11,7 +11,11 @@ from initial import Initializer
 from playerInput import PlayerInput
 from UART_send import UARTSender
 from UART_receive import UARTReceiver
-from terminal_GUI import TerminalGUI
+from consle import Consle
+import sys
+sys.stdout = open('nul', 'w')  # Windows系统
+sys.stderr = open('nul', 'w')  # Windows系统
+
 
 class AircraftCarrierTower:
     def __init__(self):
@@ -46,7 +50,7 @@ class AircraftCarrierTower:
             self.uart_receiver = UARTReceiver(self.initializer.serial_port, self.shared_data)
             
             # 初始化控制台GUI
-            self.terminal_gui = TerminalGUI(self.uart_sender, self.initializer, self.player_input, self.shared_data)
+            self.terminal_gui = Consle(self.uart_sender, self.initializer, self.player_input, self.shared_data)
             
             print("系统初始化完成")
             return True
