@@ -81,17 +81,9 @@ class PlayerInput:
             elif key == 'enter':
                 self.state_manager.handle_enter()
             
-            # 状态切换
+            # 总开关切换（仅在AUTO/TOWER模式下有效）
             elif key == 'space':
                 self._toggle_main_switch()
-            elif key == 's':
-                self._switch_to_stop()
-            elif key == 'a':
-                self._switch_to_auto()
-            elif key == 't':
-                self._switch_to_tower()
-            elif key == 'u':
-                self._switch_to_tuning()
             
             # 数字输入
             elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
@@ -105,17 +97,6 @@ class PlayerInput:
             elif key in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9']:
                 preset_num = int(key[1])  # 提取数字部分
                 self._set_preset_state(preset_num)
-            
-            # PID参数选择（在TUNING模式下）
-            elif self.shared_data.main_state == MainState.TUNING:
-                if key == 'p':
-                    self._select_prev_pid()
-                elif key == 'n':
-                    self._select_next_pid()
-                elif key == '[':
-                    self._select_prev_param()
-                elif key == ']':
-                    self._select_next_param()
             
         except Exception as e:
             print(f"按键处理错误: {e}")

@@ -6,6 +6,7 @@ import threading
 import time
 import curses
 from datetime import datetime
+from protocol import MainState, SubState
 
 class Consle:
     def __init__(self, uart_sender, initializer, player_input, shared_data=None):
@@ -118,25 +119,26 @@ class Consle:
         
         # 获取主状态
         main_state = self.shared_data.main_state
-        if main_state == 0:
+        # 使用MainState枚举值
+        if main_state == MainState.STOP:
             mode_text = "模式:STOP"
-        elif main_state == 1:
+        elif main_state == MainState.AUTO:
             mode_text = "模式:AUTO"
-        elif main_state == 2:
+        elif main_state == MainState.TOWER:
             mode_text = "模式:TOWER"
-        elif main_state == 3:
+        elif main_state == MainState.TUNING:
             mode_text = "模式:TUNING"
         else:
-            mode_text = f"模式:{main_state}"
+            mode_text = f"模式:{main_state.name}"
         
         # 获取子状态（如果处于TUNING模式）
-        if main_state == 3:
+        if main_state == MainState.TUNING:
             sub_state = self.shared_data.sub_state
-            if sub_state == 0xA1:
+            if sub_state == SubState.SERVO:
                 mode_text += "(SERVO)"
-            elif sub_state == 0xA2:
+            elif sub_state == SubState.PID:
                 mode_text += "(PID)"
-            elif sub_state == 0xA3:
+            elif sub_state == SubState.JACOBIAN:
                 mode_text += "(JACOBIAN)"
         
         switch = self.shared_data.main_switch
@@ -154,7 +156,7 @@ class Consle:
         
         line = f"{mode_text} {switch_text} {fan_text} {servo_text} {nav_text}"
          
-        self._check_status_changes(main_state, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
+        self._check_status_changes(main_state.value, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
 
         stdscr.addstr(row, 0, line)
     def _check_status_changes(self, main_state, switch, fan, servo):
@@ -166,13 +168,13 @@ class Consle:
            fan != self.last_fan or
            current_servo_str != self.last_servo):
             if main_state != self.last_mode and self.last_mode is not None:
-                if main_state == 0:
+                if main_state == MainState.STOP.value:
                     self.add_message("停止模式")
-                elif main_state == 1:
+                elif main_state == MainState.AUTO.value:
                     self.add_message("自动模式")
-                elif main_state == 2:
+                elif main_state == MainState.TOWER.value:
                     self.add_message("塔楼模式")
-                elif main_state == 3:
+                elif main_state == MainState.TUNING.value:
                     self.add_message("调参模式")
                     
             if switch != self.last_switch and self.last_switch is not None:
@@ -222,12 +224,12 @@ class Consle:
             return
         
         # 只在TUNING模式下显示
-        if self.shared_data.main_state == 3:
+        if self.shared_data.main_state == MainState.TUNING:
             sub_state = self.shared_data.sub_state
             nav_row = self.shared_data.nav_row
             nav_col = self.shared_data.nav_col
             
-            if sub_state == 0xA1:  # SERVO
+            if sub_state == SubState.SERVO:  # SERVO
                 # 显示舵机调参信息
                 if nav_row < len(self.shared_data.servo_angles):
                     servo_idx = nav_row
@@ -248,7 +250,7 @@ class Consle:
                         self.add_message(f"舵机{servo_idx}输入:{input_buffer}")
                         self.last_input_buffer = input_buffer
                         
-            elif sub_state == 0xA2:  # PID
+            elif sub_state == SubState.PID:  # PID
                 # 显示PID调参信息
                 pid_idx = nav_row
                 param_idx = nav_col
@@ -276,7 +278,7 @@ class Consle:
                         self.add_message(f"PID{pid_name}.{param_name}输入:{input_buffer}")
                         self.last_input_buffer = input_buffer
                         
-            elif sub_state == 0xA3:  # JACOBIAN
+            elif sub_state == SubState.JACOBIAN:  # JACOBIAN
                 # 显示Jacobian调参信息
                 row_idx = nav_row
                 col_idx = nav_col

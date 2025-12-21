@@ -134,9 +134,9 @@ class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码SERVO调参数据：0xA1 + 0xAA + 0xA1 + float[4] + 0xBB (19字节)"""
+        """编码SERVO调参数据：  0xAA + 0xA1 + float[4] + 0xBB (19字节)"""
         packet = bytearray()
-        packet.append(0xA1)  # SERVO标记
+       
         packet.append(0xAA)  # START_BYTE
         packet.append(0xA1)  # SERVO子状态
         
@@ -153,16 +153,16 @@ class PIDEncoder(EncoderBase):
     """PID调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码PID调参数据：0xA2 + 0xAA + 0xA2 + pid_index + float[6] + 0xBB"""
+        """编码PID调参数据：  0xAA + 0xA2 + pid_index + float[6] + 0xBB"""
         if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
             print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
             return None
         
         packet = bytearray()
-        packet.append(0xA2)  # PID标记
+       
         packet.append(0xAA)  # START_BYTE
         packet.append(0xA2)  # PID子状态
-        packet.append(data.selected_pid & 0xFF)  # PID索引
+        packet.append(data.selected_pid & 0xFF)  # PID索引 (0-6)
         
         # 发送选中的PID参数组（6个参数）
         for param_value in data.pid_param[data.selected_pid]:
@@ -172,16 +172,17 @@ class PIDEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 1 + 1 + 6*4 + 1  # 0xA2 + 0xAA + 0xA2 + pid_index + 6*float + 0xBB
+        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 0xA2 + pid_index + 6*float + 0xBB
 
 class JacobianEncoder(EncoderBase):
     """Jacobian调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码Jacobian调参数据：0xA3 + 0xAA + float[3][4] + 0xBB"""
+        """编码Jacobian调参数据：0xAA + 0xA3 + float[3][4] + 0xBB"""
         packet = bytearray()
-        packet.append(0xA3)  # JACOBIAN标记
+        
         packet.append(0xAA)  # START_BYTE
+        packet.append(0xA3)  # JACOBIAN标记
         
         # 发送3x4矩阵
         for row in data.jacobian_matrix:
@@ -192,7 +193,7 @@ class JacobianEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 3*4*4 + 1  # 0xA3 + 0xAA + 12*float + 0xBB
+        return 1 + 1 + 3*4*4 + 1  # 0xAA + 0xA3 + 12*float + 0xBB
 
 # ==================== 编码器工厂 ====================
 
@@ -308,16 +309,7 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
         return encoder.encode(data)
     return None
 
-def pid_encode_data(data: ProtocolData) -> Optional[bytearray]:
-    """
-    向后兼容的PID编码函数
-    专门用于PID调参模式
-    """
-    if data.main_state == MainState.TUNING and data.sub_state == SubState.PID:
-        encoder = EncoderFactory.get_encoder(SubState.PID)
-        if encoder:
-            return encoder.encode(data)
-    return None
+
 
 def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     """
@@ -351,20 +343,29 @@ class StateMachineManager:
         
         # 导航配置
         self.nav_config = {
+            MainState.STOP: {
+                'rows': 3,  # 行数：AUTO、TOWER、TUNING三个选项
+                'cols': 1,  # 列数：一维数组
+                'labels': ['切换到AUTO模式', '切换到TOWER模式', '切换到TUNING模式'],
+                'target_states': [MainState.AUTO, MainState.TOWER, MainState.TUNING]
+            },
             MainState.AUTO: {
                 'rows': 2,  # 行数：状态行 + 参数行
                 'cols': 4,  # 列数：开关、风扇、舵机1-4
-                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4']
+                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4'],
+                'target_states': None
             },
             MainState.TOWER: {
                 'rows': 2,
                 'cols': 4,
-                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4']
+                'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4'],
+                'target_states': None
             },
             MainState.TUNING: {
                 'rows': 3,  # 行数：子模式选择 + 参数选择 + 数值输入
                 'cols': 1,  # 列数：一维数组
-                'labels': ['舵机调参', 'PID调参', 'Jacobian调参']
+                'labels': ['舵机调参', 'PID调参', 'Jacobian调参'],
+                'target_states': [SubState.SERVO, SubState.PID, SubState.JACOBIAN]
             }
         }
     
@@ -417,7 +418,19 @@ class StateMachineManager:
     
     def handle_enter(self) -> bool:
         """处理Enter键，返回是否状态改变"""
-        if self.data.main_state == MainState.TUNING:
+        if self.data.main_state == MainState.STOP:
+            # 在STOP状态下，Enter用于切换到选中的状态
+            config = self.nav_config[MainState.STOP]
+            if 0 <= self.data.nav_row < len(config['target_states']):
+                target_state = config['target_states'][self.data.nav_row]
+                if self.data.set_main_state(target_state):
+                    # 重置导航位置
+                    self.data.nav_row = 0
+                    self.data.nav_col = 0
+                    self.data.nav_confirm = False
+                    return True
+            return False
+        elif self.data.main_state == MainState.TUNING:
             # 在TUNING模式下，Enter用于选择子模式
             if self.data.nav_row == 0:
                 self.data.set_sub_state(SubState.SERVO)
