@@ -240,10 +240,8 @@ class Consle:
                     if input_buffer:
                         line += f" [输入:{input_buffer}]"
                     
-                    _, width = stdscr.getmaxyx()
-                    if len(line) > width - 1:
-                        line = line[:width-1]
-                    
+                    # 智能截断，确保显示完整
+                    line = self._truncate_line_for_display(stdscr, row, line)
                     stdscr.addstr(row,0,line)
                     
                     if input_buffer != self.last_input_buffer:
@@ -264,14 +262,13 @@ class Consle:
                     
                     input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
                     
-                    line = f"PID:{pid_name}.{param_name}={param_value:.3f}"
+                    # 优化显示格式：移除"PID:"前缀，直接显示参数
+                    line = f"{pid_name}.{param_name}={param_value:.3f}"
                     if input_buffer:
                         line += f" [输入:{input_buffer}]"
                     
-                    _, width = stdscr.getmaxyx()
-                    if len(line) > width - 1:
-                        line = line[:width-1]
-                    
+                    # 智能截断，确保显示完整
+                    line = self._truncate_line_for_display(stdscr, row, line)
                     stdscr.addstr(row,0,line)
                     
                     if input_buffer != self.last_input_buffer:
@@ -291,10 +288,8 @@ class Consle:
                     if input_buffer:
                         line += f" [输入:{input_buffer}]"
                     
-                    _, width = stdscr.getmaxyx()
-                    if len(line) > width - 1:
-                        line = line[:width-1]
-                    
+                    # 智能截断，确保显示完整
+                    line = self._truncate_line_for_display(stdscr, row, line)
                     stdscr.addstr(row,0,line)
                     
                     if input_buffer != self.last_input_buffer:
@@ -303,14 +298,94 @@ class Consle:
             else:
                 # 显示导航信息
                 line = f"导航:行={nav_row},列={nav_col}"
+                line = self._truncate_line_for_display(stdscr, row, line)
                 stdscr.addstr(row,0,line)
         else:
             # 非TUNING模式显示导航提示
             nav_row = self.shared_data.nav_row
             nav_col = self.shared_data.nav_col
             line = f"导航:行={nav_row},列={nav_col} (上下左右导航,Enter确认)"
+            line = self._truncate_line_for_display(stdscr, row, line)
             stdscr.addstr(row,0,line)
 
+    def _truncate_line_for_display(self, stdscr, row, line):
+        """智能截断字符串，确保中文字符不被错误截断"""
+        try:
+            # 获取终端宽度
+            max_width = stdscr.getmaxyx()[1] - 1  # 留一个字符的余量
+            
+            # 如果字符串长度小于等于最大宽度，直接返回
+            if len(line) <= max_width:
+                return line
+            
+            # 计算中文字符数量（中文字符通常占2个显示宽度）
+            # 简单估算：中文字符显示宽度为2，英文字符显示宽度为1
+            display_width = 0
+            for char in line:
+                if self._is_chinese_char(char):
+                    display_width += 2
+                else:
+                    display_width += 1
+            
+            # 如果显示宽度小于等于最大宽度，直接返回
+            if display_width <= max_width:
+                return line
+            
+            # 需要截断：从末尾开始移除字符，直到显示宽度合适
+            truncated = line
+            while display_width > max_width and truncated:
+                # 移除最后一个字符
+                last_char = truncated[-1]
+                truncated = truncated[:-1]
+                
+                # 更新显示宽度
+                if self._is_chinese_char(last_char):
+                    display_width -= 2
+                else:
+                    display_width -= 1
+            
+            # 添加省略号表示截断
+            if truncated != line:
+                # 确保省略号不会导致再次超出宽度
+                ellipsis = "..."
+                ellipsis_width = len(ellipsis)  # 英文省略号，每个字符宽度为1
+                
+                # 如果添加省略号后仍然超出，继续截断
+                while display_width + ellipsis_width > max_width and truncated:
+                    last_char = truncated[-1]
+                    truncated = truncated[:-1]
+                    
+                    if self._is_chinese_char(last_char):
+                        display_width -= 2
+                    else:
+                        display_width -= 1
+                
+                truncated += ellipsis
+            
+            return truncated
+        except Exception as e:
+            # 如果出现任何错误，返回原始字符串（截断到安全长度）
+            safe_length = min(len(line), 80)  # 安全长度
+            return line[:safe_length]
+    
+    def _is_chinese_char(self, char):
+        """检查字符是否是中文字符"""
+        try:
+            code = ord(char)
+            # 中文字符的Unicode范围（包括基本汉字、扩展A区、扩展B区等）
+            return (0x4E00 <= code <= 0x9FFF or  # CJK统一表意文字
+                    0x3400 <= code <= 0x4DBF or  # CJK统一表意文字扩展A区
+                    0x20000 <= code <= 0x2A6DF or  # CJK统一表意文字扩展B区
+                    0x2A700 <= code <= 0x2B73F or  # CJK统一表意文字扩展C区
+                    0x2B740 <= code <= 0x2B81F or  # CJK统一表意文字扩展D区
+                    0x2B820 <= code <= 0x2CEAF or  # CJK统一表意文字扩展E区
+                    0x2CEB0 <= code <= 0x2EBEF or  # CJK统一表意文字扩展F区
+                    0x30000 <= code <= 0x3134F or  # CJK统一表意文字扩展G区
+                    0xF900 <= code <= 0xFAFF or  # CJK兼容表意文字
+                    0x2F800 <= code <= 0x2FA1F)  # CJK兼容表意文字补充
+        except:
+            return False
+    
     def _draw_message_line(self, stdscr, row):
         """第五行"""
         if not self.message_queue:

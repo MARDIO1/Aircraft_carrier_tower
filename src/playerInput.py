@@ -80,6 +80,8 @@ class PlayerInput:
                 self.state_manager.navigate_right()
             elif key == 'enter':
                 self.state_manager.handle_enter()
+            elif key == 'esc':
+                self.state_manager.handle_escape()
             
             # 总开关切换（仅在AUTO/TOWER模式下有效）
             elif key == 'space':
@@ -87,21 +89,45 @@ class PlayerInput:
             
             # 数字输入
             elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
-                self._handle_number_input(int(key))
+                number = int(key)
+                
+                # 根据当前状态和导航确认状态决定数字键功能
+                if self.shared_data.main_state in [MainState.AUTO, MainState.TOWER]:
+                    # 在AUTO/TOWER模式下，数字键用于预设状态
+                    if number in self.preset_states:
+                        self._set_preset_state(number)
+                elif self.shared_data.main_state == MainState.TUNING:
+                    # 在TUNING模式下，数字键用于参数输入
+                    if self.shared_data.nav_confirm:
+                        # 在确认状态下，数字键直接输入参数值
+                        self._handle_number_input(number)
+                    else:
+                        # 在未确认状态下，数字键用于选择PID组（0-6）
+                        if number <= 6:  # 只有0-6对应有效的PID组
+                            self._handle_pid_selection(number)
+                else:
+                    # 在其他模式下（如STOP），数字键用于参数输入
+                    self._handle_number_input(number)
             elif key == '.':
                 self._add_decimal_point()
             elif key == 'backspace':
                 self._delete_input_char()
             
-            # 预设状态
-            elif key in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9']:
-                preset_num = int(key[1])  # 提取数字部分
-                self._set_preset_state(preset_num)
+            
             
         except Exception as e:
             print(f"按键处理错误: {e}")
     
     # ==================== 状态切换方法 ====================
+    def _switch_to_stop_and_reset(self):
+        """切换到STOP状态并重置所有参数"""
+        if self.shared_data.set_main_state(MainState.STOP):
+            # 重置所有控制参数为STOP状态默认值
+            self.shared_data.main_switch = 0
+            self.shared_data.fan_speed = 0
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+            self._clear_input_buffer()
+
     
     def _toggle_main_switch(self):
         """切换总开关状态"""
@@ -113,6 +139,8 @@ class PlayerInput:
             # 在AUTO或TOWER状态下，切换到STOP
             self.shared_data.set_main_state(MainState.STOP)
             self.shared_data.main_switch = 0
+            self.shared_data.fan_speed = 0
+            self.shared_data.servo_angles = [0.0, 0.0, 0.0, 0.0]
         elif self.shared_data.main_state == MainState.TUNING:
             # 在TUNING状态下，不能切换开关
             pass
@@ -227,17 +255,26 @@ class PlayerInput:
     
     # ==================== PID参数选择方法 ====================
     
+    def _handle_pid_selection(self, pid_index: int):
+        """处理PID组选择"""
+        if 0 <= pid_index < len(self.shared_data.pid_param):
+            self.shared_data.selected_pid = pid_index
+            self._clear_input_buffer()
+            print(f"已选择PID组: {self.shared_data.pid_name[pid_index]} (编码值: 0x{PID_TYPE_ENCODING.get(pid_index, 0xA1):02X})")
+    
     def _select_prev_pid(self):
         """选择上一个PID"""
         if self.shared_data.selected_pid > 0:
             self.shared_data.selected_pid -= 1
             self._clear_input_buffer()
+            print(f"已选择PID组: {self.shared_data.pid_name[self.shared_data.selected_pid]} (编码值: 0x{PID_TYPE_ENCODING.get(self.shared_data.selected_pid, 0xA1):02X})")
     
     def _select_next_pid(self):
         """选择下一个PID"""
         if self.shared_data.selected_pid < len(self.shared_data.pid_param) - 1:
             self.shared_data.selected_pid += 1
             self._clear_input_buffer()
+            print(f"已选择PID组: {self.shared_data.pid_name[self.shared_data.selected_pid]} (编码值: 0x{PID_TYPE_ENCODING.get(self.shared_data.selected_pid, 0xA1):02X})")
     
     def _select_prev_param(self):
         """选择上一个参数"""

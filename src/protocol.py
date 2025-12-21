@@ -7,6 +7,17 @@ import struct
 import time
 from enum import Enum
 from typing import Optional, List, Tuple, Dict, Any
+# PID类型编码映射
+PID_TYPE_ENCODING = {
+    0: 0xA1,  # 内环主翼舵机
+    1: 0xA2,  # 内环尾翼舵机
+    2: 0xB1,  # 中环roll
+    3: 0xB2,  # 中环pitch
+    4: 0xB3,  # 中环yaw
+    5: 0xC1,  # 外环方向(yaw)
+    6: 0xC2,  # 外环高度
+}
+
 
 # ==================== 状态机定义 ====================
 
@@ -153,15 +164,17 @@ class PIDEncoder(EncoderBase):
     """PID调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码PID调参数据：  0xAA + 0xA2 + pid_index + float[6] + 0xBB"""
+        """编码PID调参数据：0xAA + 编码值 + pid_index + float[6] + 0xBB"""
         if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
             print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
             return None
         
+        # 获取编码值
+        encoding_value = PID_TYPE_ENCODING.get(data.selected_pid, 0xA1)
+        
         packet = bytearray()
-       
         packet.append(0xAA)  # START_BYTE
-        packet.append(0xA2)  # PID子状态
+        packet.append(encoding_value)  # 使用映射的编码值
         packet.append(data.selected_pid & 0xFF)  # PID索引 (0-6)
         
         # 发送选中的PID参数组（6个参数）
@@ -172,7 +185,7 @@ class PIDEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 0xA2 + pid_index + 6*float + 0xBB
+        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 编码值 + pid_index + 6*float + 0xBB
 
 class JacobianEncoder(EncoderBase):
     """Jacobian调参编码器"""
@@ -341,7 +354,7 @@ class StateMachineManager:
     def __init__(self, protocol_data: ProtocolData):
         self.data = protocol_data
         
-        # 导航配置
+        # 导航配置 - 修复版
         self.nav_config = {
             MainState.STOP: {
                 'rows': 3,  # 行数：AUTO、TOWER、TUNING三个选项
@@ -350,22 +363,30 @@ class StateMachineManager:
                 'target_states': [MainState.AUTO, MainState.TOWER, MainState.TUNING]
             },
             MainState.AUTO: {
-                'rows': 2,  # 行数：状态行 + 参数行
-                'cols': 4,  # 列数：开关、风扇、舵机1-4
+                'rows': 0,  # 行数：只有参数行
+                'cols': 0,  # 列数：开关、风扇、舵机1-4
                 'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4'],
                 'target_states': None
             },
             MainState.TOWER: {
-                'rows': 2,
-                'cols': 4,
+                'rows': 1,
+                'cols': 6,
                 'labels': ['开关', '风扇', '舵机1', '舵机2', '舵机3', '舵机4'],
                 'target_states': None
             },
             MainState.TUNING: {
-                'rows': 3,  # 行数：子模式选择 + 参数选择 + 数值输入
-                'cols': 1,  # 列数：一维数组
+                'rows': 3,  # 行数：三个子模式
+                'cols': 1,  # 列数：一维数组（选择子模式）
                 'labels': ['舵机调参', 'PID调参', 'Jacobian调参'],
-                'target_states': [SubState.SERVO, SubState.PID, SubState.JACOBIAN]
+                'target_states': [SubState.SERVO, SubState.PID, SubState.JACOBIAN],
+                # 子模式的具体导航配置
+                'sub_nav_config': {
+                    SubState.SERVO: {'rows': 1, 'cols': 4, 'labels': ['舵机1', '舵机2', '舵机3', '舵机4']},
+                    SubState.PID: {'rows': 7, 'cols': 6, 'labels': ['PID组选择'] + ['kp', 'ki', 'kd', '积分限幅', '正输出限幅', '负输出限幅']},
+                    SubState.JACOBIAN: {'rows': 3, 'cols': 4, 'labels': ['J[0,0]', 'J[0,1]', 'J[0,2]', 'J[0,3]', 
+                                                                        'J[1,0]', 'J[1,1]', 'J[1,2]', 'J[1,3]',
+                                                                        'J[2,0]', 'J[2,1]', 'J[2,2]', 'J[2,3]']}
+                }
             }
         }
     
@@ -386,29 +407,85 @@ class StateMachineManager:
     
     def navigate_up(self) -> None:
         """向上导航"""
-        if self.data.main_state in self.nav_config:
-            config = self.nav_config[self.data.main_state]
+        if self.data.main_state == MainState.AUTO:
+            return
+        if self.data.main_state not in self.nav_config:
+            return
+            
+        config = self.nav_config[self.data.main_state]
+        
+        # 处理TUNING模式下的子模式导航
+        if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
+            # 在确认状态下，使用子模式的导航配置
+            if self.data.sub_state in config.get('sub_nav_config', {}):
+                sub_config = config['sub_nav_config'][self.data.sub_state]
+                if self.data.nav_row > 0:
+                    self.data.nav_row -= 1
+        else:
+            # 正常导航
             if self.data.nav_row > 0:
                 self.data.nav_row -= 1
     
     def navigate_down(self) -> None:
         """向下导航"""
-        if self.data.main_state in self.nav_config:
-            config = self.nav_config[self.data.main_state]
+        if self.data.main_state == MainState.AUTO:
+            return
+        if self.data.main_state not in self.nav_config:
+            return
+            
+        config = self.nav_config[self.data.main_state]
+        
+        # 处理TUNING模式下的子模式导航
+        if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
+            # 在确认状态下，使用子模式的导航配置
+            if self.data.sub_state in config.get('sub_nav_config', {}):
+                sub_config = config['sub_nav_config'][self.data.sub_state]
+                if self.data.nav_row < sub_config['rows'] - 1:
+                    self.data.nav_row += 1
+        else:
+            # 正常导航
             if self.data.nav_row < config['rows'] - 1:
                 self.data.nav_row += 1
     
     def navigate_left(self) -> None:
         """向左导航"""
-        if self.data.main_state in self.nav_config:
-            config = self.nav_config[self.data.main_state]
+        if self.data.main_state == MainState.AUTO:
+            return
+        if self.data.main_state not in self.nav_config:
+            return
+            
+        config = self.nav_config[self.data.main_state]
+        
+        # 处理TUNING模式下的子模式导航
+        if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
+            # 在确认状态下，使用子模式的导航配置
+            if self.data.sub_state in config.get('sub_nav_config', {}):
+                sub_config = config['sub_nav_config'][self.data.sub_state]
+                if self.data.nav_col > 0:
+                    self.data.nav_col -= 1
+        else:
+            # 正常导航
             if self.data.nav_col > 0:
                 self.data.nav_col -= 1
     
     def navigate_right(self) -> None:
         """向右导航"""
-        if self.data.main_state in self.nav_config:
-            config = self.nav_config[self.data.main_state]
+        if self.data.main_state == MainState.AUTO:
+            return
+        if self.data.main_state not in self.nav_config:
+            return
+            
+        config = self.nav_config[self.data.main_state]
+        
+        # 处理TUNING模式下的子模式导航
+        if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
+            # 在确认状态下，使用子模式的导航配置
+            if self.data.sub_state in config.get('sub_nav_config', {}):
+                sub_config = config['sub_nav_config'][self.data.sub_state]
+                if self.data.nav_col < sub_config['cols'] - 1:
+                    self.data.nav_col += 1
+        else:
+            # 正常导航
             if self.data.nav_col < config['cols'] - 1:
                 self.data.nav_col += 1
     
@@ -418,6 +495,8 @@ class StateMachineManager:
     
     def handle_enter(self) -> bool:
         """处理Enter键，返回是否状态改变"""
+        if self.data.main_state == MainState.AUTO:
+            return False
         if self.data.main_state == MainState.STOP:
             # 在STOP状态下，Enter用于切换到选中的状态
             config = self.nav_config[MainState.STOP]
@@ -430,19 +509,64 @@ class StateMachineManager:
                     self.data.nav_confirm = False
                     return True
             return False
+        
         elif self.data.main_state == MainState.TUNING:
-            # 在TUNING模式下，Enter用于选择子模式
-            if self.data.nav_row == 0:
-                self.data.set_sub_state(SubState.SERVO)
-            elif self.data.nav_row == 1:
-                self.data.set_sub_state(SubState.PID)
-            elif self.data.nav_row == 2:
-                self.data.set_sub_state(SubState.JACOBIAN)
-            return True
+            # 在TUNING模式下，Enter用于选择子模式或确认参数
+            if not self.data.nav_confirm:
+                # 第一次按Enter：选择子模式并进入确认状态
+                if self.data.nav_row == 0:
+                    self.data.set_sub_state(SubState.SERVO)
+                elif self.data.nav_row == 1:
+                    self.data.set_sub_state(SubState.PID)
+                elif self.data.nav_row == 2:
+                    self.data.set_sub_state(SubState.JACOBIAN)
+                
+                # 进入确认状态
+                self.data.nav_confirm = True
+                # 重置导航位置到子模式的起始位置
+                self.data.nav_row = 0
+                self.data.nav_col = 0
+                return True
+            else:
+                # 在确认状态下，Enter用于确认参数选择或进入下一个参数
+                if self.data.sub_state == SubState.PID:
+                    # 在PID模式下，Enter用于确认当前参数并移动到下一个
+                    if self.data.nav_col < 5:  # 还有更多参数
+                        self.data.nav_col += 1
+                    else:
+                        # 所有参数都确认完毕，退出确认状态
+                        self.data.nav_confirm = False
+                        self.data.nav_row = 0
+                        self.data.nav_col = 0
+                elif self.data.sub_state == SubState.JACOBIAN:
+                    # 在Jacobian模式下，Enter用于确认当前单元格并移动到下一个
+                    if self.data.nav_col < 3:  # 还有更多列
+                        self.data.nav_col += 1
+                    elif self.data.nav_row < 2:  # 还有更多行
+                        self.data.nav_row += 1
+                        self.data.nav_col = 0
+                    else:
+                        # 所有单元格都确认完毕，退出确认状态
+                        self.data.nav_confirm = False
+                        self.data.nav_row = 0
+                        self.data.nav_col = 0
+                else:
+                    # 其他子模式，Enter退出确认状态
+                    self.data.nav_confirm = False
+                    self.data.nav_row = 0
+                    self.data.nav_col = 0
+                return True
+        
         else:
-            # 在其他模式下，Enter用于确认导航位置
-            self.toggle_confirm()
-            return False
+            # 在AUTO或TOWER模式下，Enter用于确认导航位置
+            if not self.data.nav_confirm:
+                # 第一次按Enter：进入确认状态
+                self.data.nav_confirm = True
+                return True
+            else:
+                # 在确认状态下，Enter用于确认参数并退出确认状态
+                self.data.nav_confirm = False
+                return False
     
     def handle_number_input(self, number: int) -> None:
         """处理数字输入"""
@@ -467,22 +591,81 @@ class StateMachineManager:
                 servo_index = self.data.nav_col - 2
                 self.data.servo_angles[servo_index] = float(number)
     
+    def handle_escape(self) -> bool:
+        """处理Esc键，返回是否状态改变"""
+        if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
+            # 在TUNING模式的确认状态下，Esc退出确认状态
+            self.data.nav_confirm = False
+            self.data.nav_row = 0
+            self.data.nav_col = 0
+            return True
+        elif self.data.main_state != MainState.STOP:
+            # 在其他非STOP状态下，Esc返回到STOP状态
+            if self.data.set_main_state(MainState.STOP):
+                # 重置导航位置
+                self.data.nav_row = 0
+                self.data.nav_col = 0
+                self.data.nav_confirm = False
+                self.data.main_switch = 0
+                self.data.fan_speed = 0
+                self.data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+                return True
+        return False
+    
     def get_current_selection(self) -> str:
         """获取当前选择的项目描述"""
         if self.data.main_state not in self.nav_config:
             return "无导航"
         
         config = self.nav_config[self.data.main_state]
+        
+        # 处理TUNING模式
         if self.data.main_state == MainState.TUNING:
-            if self.data.nav_row == 0:
-                return "舵机调参模式"
-            elif self.data.nav_row == 1:
-                return f"PID调参: {self.data.pid_name[self.data.selected_pid]}"
-            elif self.data.nav_row == 2:
-                return f"Jacobian调参: 行{self.data.nav_row},列{self.data.nav_col}"
-        else:
-            label_index = self.data.nav_row * config['cols'] + self.data.nav_col
-            if label_index < len(config['labels']):
-                return config['labels'][label_index]
+            if not self.data.nav_confirm:
+                # 未确认状态：选择子模式
+                if self.data.nav_row == 0:
+                    return "舵机调参模式"
+                elif self.data.nav_row == 1:
+                    return "PID调参模式"
+                elif self.data.nav_row == 2:
+                    return "Jacobian调参模式"
+            else:
+                # 确认状态：显示具体参数
+                if self.data.sub_state == SubState.SERVO:
+                    if 0 <= self.data.nav_col < 4:
+                        return f"舵机{self.data.nav_col + 1}: {self.data.servo_angles[self.data.nav_col]:.2f}"
+                elif self.data.sub_state == SubState.PID:
+                    if self.data.nav_row == 0:
+                        # PID组选择
+                        return f"PID组: {self.data.pid_name[self.data.nav_col]}"
+                    else:
+                        # 具体参数
+                        pid_index = self.data.nav_row - 1
+                        param_index = self.data.nav_col
+                        if 0 <= pid_index < 7 and 0 <= param_index < 6:
+                            param_name = self.data.param_names[param_index]
+                            param_value = self.data.pid_param[pid_index][param_index]
+                            return f"PID[{pid_index}].{param_name}: {param_value:.2f}"
+                elif self.data.sub_state == SubState.JACOBIAN:
+                    if 0 <= self.data.nav_row < 3 and 0 <= self.data.nav_col < 4:
+                        value = self.data.jacobian_matrix[self.data.nav_row][self.data.nav_col]
+                        return f"J[{self.data.nav_row},{self.data.nav_col}]: {value:.2f}"
+        
+        # 其他模式
+        label_index = self.data.nav_row * config['cols'] + self.data.nav_col
+        if label_index < len(config['labels']):
+            label = config['labels'][label_index]
+            
+            # 添加当前值信息
+            if self.data.main_state in [MainState.AUTO, MainState.TOWER]:
+                if label_index == 0:  # 开关
+                    return f"{label}: {self.data.main_switch}"
+                elif label_index == 1:  # 风扇
+                    return f"{label}: {self.data.fan_speed}"
+                elif 2 <= label_index <= 5:  # 舵机
+                    servo_index = label_index - 2
+                    return f"{label}: {self.data.servo_angles[servo_index]:.2f}"
+            
+            return label
         
         return "未知选择"

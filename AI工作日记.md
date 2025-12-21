@@ -125,5 +125,21 @@
                        1  pid    0xa2  aa 0xa2 0x00到0xc2 决定哪组参数 float[6] bb
                        2  jacobian  0xa3 aa  float[3][4] bb
                         
-                       
+                       height, width = stdscr.getmaxyx()
+        max_width = width - 1  # 留一个字符的边距
+        
+        if len(line) <= int(max_width * 1.5):
+            return line
+        
+        # 如果字符串包含中文字符，需要更谨慎地截断
+        # 简单方法：从末尾开始移除字符，直到适合宽度
+        truncated = line
+        while len(truncated) > max_width and len(truncated) > 3:
+            truncated = truncated[:-1]
+        
+        # 如果截断后以中文字符的一半结束，再移除一个字符
+        if len(truncated) > 0 and self._is_chinese_char_half(truncated[-1]):
+            truncated = truncated[:-1]
+        
+        return truncated
 
