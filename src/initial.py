@@ -41,7 +41,7 @@ class Initializer:
         
         return available_ports
     
-    def initialize_serial(self, com_port="COM7"):
+    def initialize_serial(self, com_port="COM16"):
         """
         初始化串口连接
         Args:

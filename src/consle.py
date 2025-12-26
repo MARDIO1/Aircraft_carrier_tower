@@ -231,8 +231,9 @@ class Consle:
             
             if sub_state == SubState.SERVO:  # SERVO
                 # 显示舵机调参信息
-                if nav_row < len(self.shared_data.servo_angles):
-                    servo_idx = nav_row
+                # 修复：使用nav_col而不是nav_row来索引舵机
+                if 0 <= nav_col < len(self.shared_data.servo_angles):
+                    servo_idx = nav_col
                     servo_value = self.shared_data.servo_angles[servo_idx]
                     input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
                     
@@ -247,6 +248,11 @@ class Consle:
                     if input_buffer != self.last_input_buffer:
                         self.add_message(f"舵机{servo_idx}输入:{input_buffer}")
                         self.last_input_buffer = input_buffer
+                else:
+                    # 如果nav_col超出范围，显示默认信息
+                    line = f"舵机选择:使用左右键选择舵机(0-3)"
+                    line = self._truncate_line_for_display(stdscr, row, line)
+                    stdscr.addstr(row,0,line)
                         
             elif sub_state == SubState.PID:  # PID
                 # 显示PID调参信息

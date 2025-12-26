@@ -38,6 +38,9 @@ class PlayerInput:
             9: {"main_switch": 1, "fan_speed": 1990, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
         }
         
+        # 注册导航回调
+        self.state_manager.register_navigation_callback(self._on_navigation_changed)
+        
     def start_capture(self):
         """开始捕获键盘输入"""
         if self.running:
@@ -53,6 +56,8 @@ class PlayerInput:
         self.running = False
         if self.input_thread:
             self.input_thread.join(timeout=1.0)
+        # 注销导航回调
+        self.state_manager.unregister_navigation_callback(self._on_navigation_changed)
             
     def _input_loop(self):
         """键盘输入循环"""
@@ -99,15 +104,15 @@ class PlayerInput:
                 elif self.shared_data.main_state == MainState.TUNING:
                     # 在TUNING模式下，数字键用于参数输入
                     if self.shared_data.nav_confirm:
-                        # 在确认状态下，数字键直接输入参数值
-                        self._handle_number_input(number)
+                        # 在确认状态下，数字键添加到缓冲区（用于输入多位数字）
+                        self._add_digit(str(number))
                     else:
-                        # 在未确认状态下，数字键用于选择PID组（0-6）
-                        if number <= 6:  # 只有0-6对应有效的PID组
-                            self._handle_pid_selection(number)
+                        # 在未确认状态下，数字键用于输入数字到缓冲区
+                        # 用户应该先选择参数，然后输入数字
+                        self._add_digit(str(number))
                 else:
                     # 在其他模式下（如STOP），数字键用于参数输入
-                    self._handle_number_input(number)
+                    self._add_digit(str(number))
             elif key == '.':
                 self._add_decimal_point()
             elif key == 'backspace':
@@ -172,12 +177,8 @@ class PlayerInput:
     
     def _handle_number_input(self, number: int):
         """处理数字输入"""
-        if self.shared_data.nav_confirm:
-            # 如果已确认，直接处理数字输入
-            self.state_manager.handle_number_input(number)
-        else:
-            # 否则添加到缓冲区
-            self._add_digit(str(number))
+        # 总是添加到缓冲区，以便支持多位数字输入
+        self._add_digit(str(number))
     
     def _add_digit(self, digit: str):
         """添加数字到缓冲区"""
@@ -211,6 +212,14 @@ class PlayerInput:
         self.input_decimal = False
         self.last_input_buffer = ""
     
+    def _on_navigation_changed(self, nav_row: int, nav_col: int):
+        """
+        导航变化回调函数
+        当导航位置改变时，清空输入缓冲区
+        """
+        self._clear_input_buffer()
+        print(f"导航位置改变: 行={nav_row}, 列={nav_col}, 已清空输入缓冲区")
+    
     def _update_param_from_buffer(self):
         """从缓冲区更新参数值"""
         if not self.input_buffer:
@@ -225,10 +234,10 @@ class PlayerInput:
             # 根据当前状态和导航位置更新参数
             if self.shared_data.main_state == MainState.TUNING:
                 if self.shared_data.sub_state == SubState.PID:
-                    # 更新PID参数
+                    # 更新PID参数 - 使用nav_col作为参数索引
                     if 0 <= self.shared_data.selected_pid < len(self.shared_data.pid_param):
-                        if 0 <= self.shared_data.selected_param < len(self.shared_data.pid_param[0]):
-                            self.shared_data.pid_param[self.shared_data.selected_pid][self.shared_data.selected_param] = value
+                        if 0 <= self.shared_data.nav_col < len(self.shared_data.pid_param[0]):
+                            self.shared_data.pid_param[self.shared_data.selected_pid][self.shared_data.nav_col] = value
                 elif self.shared_data.sub_state == SubState.JACOBIAN:
                     # 更新Jacobian矩阵
                     row = self.shared_data.nav_row

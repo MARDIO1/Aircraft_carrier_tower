@@ -9,13 +9,14 @@ from enum import Enum
 from typing import Optional, List, Tuple, Dict, Any
 # PID类型编码映射
 PID_TYPE_ENCODING = {
-    0: 0xA1,  # 内环主翼舵机
-    1: 0xA2,  # 内环尾翼舵机
-    2: 0xB1,  # 中环roll
-    3: 0xB2,  # 中环pitch
-    4: 0xB3,  # 中环yaw
-    5: 0xC1,  # 外环方向(yaw)
-    6: 0xC2,  # 外环高度
+    -1: 0x00,  # 不改状态
+    0: 0xA1,   # 内环主翼舵机
+    1: 0xA2,   # 内环尾翼舵机
+    2: 0xB1,   # 中环roll
+    3: 0xB2,   # 中环pitch
+    4: 0xB3,   # 中环yaw
+    5: 0xC1,   # 外环方向(yaw)
+    6: 0xC2,   # 外环高度
 }
 
 
@@ -107,9 +108,10 @@ class AutoEncoder(EncoderBase):
     """AUTO状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码AUTO状态数据：0xAA + uint8[1] + int16[1] + float32[4] + 0xBB (21字节)"""
+        """编码AUTO状态数据：0xAA + 0x01 + uint8[1] + int16[1] + float32[4] + 0xBB (22字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
+        packet.append(0x01)  # AUTO状态标识
         packet.append(data.main_switch & 0xFF)
         packet.extend(struct.pack('<h', data.fan_speed))
         
@@ -120,15 +122,16 @@ class AutoEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 21
+        return 22
 
 class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码TOWER状态数据：0xAA + uint8[1] + int16[1] + float32[4] + 0xBB (21字节)"""
+        """编码TOWER状态数据：0xAA + 0x02 + uint8[1] + int16[1] + float32[4] + 0xBB (22字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
+        packet.append(0x02)  # TOWER状态标识
         packet.append(data.main_switch & 0xFF)
         packet.extend(struct.pack('<h', data.fan_speed))
         
@@ -139,7 +142,7 @@ class TowerEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 21
+        return 22
 
 class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""
@@ -164,18 +167,28 @@ class PIDEncoder(EncoderBase):
     """PID调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码PID调参数据：0xAA + 编码值 + pid_index + float[6] + 0xBB"""
+        """编码PID调参数据：0xAA + 0xA2 + pid_type_encoding + float[6] + 0xBB"""
         if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
             print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
             return None
         
-        # 获取编码值
-        encoding_value = PID_TYPE_ENCODING.get(data.selected_pid, 0xA1)
-        
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
-        packet.append(encoding_value)  # 使用映射的编码值
-        packet.append(data.selected_pid & 0xFF)  # PID索引 (0-6)
+        packet.append(0xA2)  # PID调参状态标识
+        
+        # 根据pid_tuning_state决定第三个字节
+        # -1表示"不改"状态，发送0x00
+        # 0-6表示正在调整的PID组，发送对应的编码
+        if data.pid_tuning_state == -1:
+            # "不改"状态，发送0x00
+            packet.append(0x00)
+        elif 0 <= data.pid_tuning_state <= 6:
+            # 正在调整的PID组，发送对应的编码
+            pid_encoding = PID_TYPE_ENCODING.get(data.pid_tuning_state, 0x00)
+            packet.append(pid_encoding)
+        else:
+            # 无效状态，默认发送0x00
+            packet.append(0x00)
         
         # 发送选中的PID参数组（6个参数）
         for param_value in data.pid_param[data.selected_pid]:
@@ -185,7 +198,7 @@ class PIDEncoder(EncoderBase):
         return packet
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 编码值 + pid_index + 6*float + 0xBB
+        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 0xA2 + pid_type_encoding + 6*float + 0xBB
 
 class JacobianEncoder(EncoderBase):
     """Jacobian调参编码器"""
@@ -284,6 +297,9 @@ class ProtocolData:
         self.nav_col = 0  # 当前导航列
         self.nav_confirm = False  # 是否已确认
         
+        # PID调参状态：-1表示"不改"状态，0-6表示正在调整的PID组
+        self.pid_tuning_state = -1  # 初始为"不改"状态
+        
         # 接收数据
         self.received_switch = 0
         self.received_angle_roll = 0.0
@@ -353,6 +369,7 @@ class StateMachineManager:
     
     def __init__(self, protocol_data: ProtocolData):
         self.data = protocol_data
+        self.navigation_callbacks = []
         
         # 导航配置 - 修复版
         self.nav_config = {
@@ -389,7 +406,21 @@ class StateMachineManager:
                 }
             }
         }
-    
+    def register_navigation_callback(self,callback):
+        """注册"""
+        if callback not in self.navigation_callbacks:
+            self.navigation_callbacks.append(callback)
+    def unregister_navigation_callback(self,callback):
+        """解册"""
+        if callback in self.navigation_callbacks:
+            self.navigation_callbacks.remove(callback)
+    def _trigger_navigation_event(self):
+        """触发回调"""
+        for callback in self.navigation_callbacks:
+            try:
+                callback(self.data.nav_row, self.data.nav_col)
+            except Exception as e:
+                print(f"导航回调错误:{e}")
     def get_nav_info(self) -> Dict[str, Any]:
         """获取当前导航信息"""
         if self.data.main_state not in self.nav_config:
@@ -414,6 +445,7 @@ class StateMachineManager:
             
         config = self.nav_config[self.data.main_state]
         
+        
         # 处理TUNING模式下的子模式导航
         if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
             # 在确认状态下，使用子模式的导航配置
@@ -425,6 +457,7 @@ class StateMachineManager:
             # 正常导航
             if self.data.nav_row > 0:
                 self.data.nav_row -= 1
+        self._trigger_navigation_event()
     
     def navigate_down(self) -> None:
         """向下导航"""
@@ -446,7 +479,7 @@ class StateMachineManager:
             # 正常导航
             if self.data.nav_row < config['rows'] - 1:
                 self.data.nav_row += 1
-    
+        self._trigger_navigation_event()
     def navigate_left(self) -> None:
         """向左导航"""
         if self.data.main_state == MainState.AUTO:
@@ -467,7 +500,7 @@ class StateMachineManager:
             # 正常导航
             if self.data.nav_col > 0:
                 self.data.nav_col -= 1
-    
+        self._trigger_navigation_event()
     def navigate_right(self) -> None:
         """向右导航"""
         if self.data.main_state == MainState.AUTO:
@@ -488,10 +521,11 @@ class StateMachineManager:
             # 正常导航
             if self.data.nav_col < config['cols'] - 1:
                 self.data.nav_col += 1
-    
+        self._trigger_navigation_event()
     def toggle_confirm(self) -> None:
         """切换确认状态"""
         self.data.nav_confirm = not self.data.nav_confirm
+        self._trigger_navigation_event()
     
     def handle_enter(self) -> bool:
         """处理Enter键，返回是否状态改变"""
@@ -518,6 +552,12 @@ class StateMachineManager:
                     self.data.set_sub_state(SubState.SERVO)
                 elif self.data.nav_row == 1:
                     self.data.set_sub_state(SubState.PID)
+                    # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
+                    self.data.pid_tuning_state = -1
+                    print("进入PID调参模式，当前状态：不改 (0x00)")
+                    # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
+                    self.data.pid_tuning_state = -1
+                    print("进入PID调参模式，当前状态：不改 (0x00)")
                 elif self.data.nav_row == 2:
                     self.data.set_sub_state(SubState.JACOBIAN)
                 
@@ -526,18 +566,34 @@ class StateMachineManager:
                 # 重置导航位置到子模式的起始位置
                 self.data.nav_row = 0
                 self.data.nav_col = 0
+                self._trigger_navigation_event()
                 return True
             else:
                 # 在确认状态下，Enter用于确认参数选择或进入下一个参数
                 if self.data.sub_state == SubState.PID:
-                    # 在PID模式下，Enter用于确认当前参数并移动到下一个
-                    if self.data.nav_col < 5:  # 还有更多参数
-                        self.data.nav_col += 1
+                    # 在PID模式下，Enter用于确认当前的PID种类
+                    # 根据当前导航位置确定选中的PID组
+                    if self.data.nav_row == 0:
+                        # 在第0行（PID组选择行），nav_col表示PID组索引
+                        if 0 <= self.data.nav_col < 7:
+                            self.data.selected_pid = self.data.nav_col
+                            # 更新pid_tuning_state为选中的PID组索引
+                            self.data.pid_tuning_state = self.data.nav_col
+                            print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
+                            print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
                     else:
-                        # 所有参数都确认完毕，退出确认状态
-                        self.data.nav_confirm = False
-                        self.data.nav_row = 0
-                        self.data.nav_col = 0
+                        # 在其他行（具体参数行），nav_row-1表示PID组索引
+                        pid_index = self.data.nav_row - 1
+                        if 0 <= pid_index < 7:
+                            self.data.selected_pid = pid_index
+                            # 更新pid_tuning_state为选中的PID组索引
+                            self.data.pid_tuning_state = pid_index
+                            print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
+                            print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
+                    
+                    # 不退出确认状态，让用户可以继续调整参数
+                    # 如果需要退出确认状态，可以按Esc键
+                    self._trigger_navigation_event()
                 elif self.data.sub_state == SubState.JACOBIAN:
                     # 在Jacobian模式下，Enter用于确认当前单元格并移动到下一个
                     if self.data.nav_col < 3:  # 还有更多列
@@ -550,11 +606,18 @@ class StateMachineManager:
                         self.data.nav_confirm = False
                         self.data.nav_row = 0
                         self.data.nav_col = 0
+                        self._trigger_navigation_event()
+                elif self.data.sub_state == SubState.SERVO:
+                    # 在舵机模式下，Enter键用于确认输入或清空输入缓冲区
+                    # 这里我们不退出确认状态，让用户可以继续输入
+                    # 如果需要退出确认状态，可以按Esc键
+                    pass  # 舵机模式下Enter键不执行任何操作，用户直接输入数字即可
                 else:
                     # 其他子模式，Enter退出确认状态
                     self.data.nav_confirm = False
                     self.data.nav_row = 0
                     self.data.nav_col = 0
+                    self._trigger_navigation_event()
                 return True
         
         else:
@@ -562,25 +625,46 @@ class StateMachineManager:
             if not self.data.nav_confirm:
                 # 第一次按Enter：进入确认状态
                 self.data.nav_confirm = True
+                self._trigger_navigation_event()
                 return True
             else:
                 # 在确认状态下，Enter用于确认参数并退出确认状态
                 self.data.nav_confirm = False
+                self._trigger_navigation_event()
                 return False
-    
+       
     def handle_number_input(self, number: int) -> None:
         """处理数字输入"""
         if self.data.main_state == MainState.TUNING:
             if self.data.sub_state == SubState.PID:
-                # 在PID调参模式下，数字用于选择参数
-                if 0 <= number < len(self.data.pid_param[0]):
-                    self.data.selected_param = number
+                # 在PID调参模式下，数字用于修改参数值
+                if self.data.nav_row == 0:
+                    # 在第0行（PID组选择行），数字用于选择PID组
+                    if 0 <= number < 7:
+                        self.data.selected_pid = number
+                        self.data.nav_col = number  # 更新导航列以匹配选择的PID组
+                        # 更新pid_tuning_state为选中的PID组索引
+                        self.data.pid_tuning_state = number
+                        print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
+                        print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
+                else:
+                    # 在其他行（具体参数行），数字用于修改当前选中的PID组的参数值
+                    param_index = self.data.nav_col
+                    if 0 <= self.data.selected_pid < 7 and 0 <= param_index < 6:
+                        # 将数字转换为浮点数作为参数值
+                        self.data.pid_param[self.data.selected_pid][param_index] = float(number)
+                        print(f"已设置PID[{self.data.selected_pid}].{self.data.param_names[param_index]} = {number}")
             elif self.data.sub_state == SubState.JACOBIAN:
                 # 在Jacobian调参模式下，数字用于输入矩阵值
                 row = self.data.nav_row
                 col = self.data.nav_col
                 if 0 <= row < 3 and 0 <= col < 4:
                     self.data.jacobian_matrix[row][col] = float(number)
+            elif self.data.sub_state == SubState.SERVO:
+                # 在舵机模式下，数字用于设置舵机角度
+                servo_index = self.data.nav_col
+                if 0 <= servo_index < 4:
+                    self.data.servo_angles[servo_index] = float(number)
         else:
             # 在其他模式下，数字用于设置参数值
             if self.data.nav_col == 0:  # 开关
@@ -595,9 +679,15 @@ class StateMachineManager:
         """处理Esc键，返回是否状态改变"""
         if self.data.main_state == MainState.TUNING and self.data.nav_confirm:
             # 在TUNING模式的确认状态下，Esc退出确认状态
+            # 如果是PID调参模式，重置pid_tuning_state为-1（"不改"状态）
+            if self.data.sub_state == SubState.PID:
+                self.data.pid_tuning_state = -1
+                print("退出PID调参确认状态，重置为不改状态 (0x00)")
+            
             self.data.nav_confirm = False
             self.data.nav_row = 0
             self.data.nav_col = 0
+            self._trigger_navigation_event()
             return True
         elif self.data.main_state != MainState.STOP:
             # 在其他非STOP状态下，Esc返回到STOP状态
@@ -609,6 +699,9 @@ class StateMachineManager:
                 self.data.main_switch = 0
                 self.data.fan_speed = 0
                 self.data.servo_angles = [0.0, 0.0, 0.0, 0.0]
+                # 重置pid_tuning_state为-1（"不改"状态）
+                self.data.pid_tuning_state = -1
+                self._trigger_navigation_event()
                 return True
         return False
     
