@@ -190,9 +190,13 @@ class PIDEncoder(EncoderBase):
             # 无效状态，默认发送0x00
             packet.append(0x00)
         
-        # 发送选中的PID参数组（6个参数）
-        for param_value in data.pid_param[data.selected_pid]:
-            packet.extend(struct.pack('<f', float(param_value)))
+        # 发送当前pid_tuning_state对应的PID组参数
+        # 如果pid_tuning_state=-1，发送selected_pid的参数
+        pid_to_send = data.selected_pid if data.pid_tuning_state == -1 else data.pid_tuning_state
+        
+        if 0 <= pid_to_send < len(data.pid_param):
+            for param_value in data.pid_param[pid_to_send]:
+                packet.extend(struct.pack('<f', float(param_value)))
         
         packet.append(0xBB)  # END_BYTE
         return packet
@@ -399,7 +403,22 @@ class StateMachineManager:
                 # 子模式的具体导航配置
                 'sub_nav_config': {
                     SubState.SERVO: {'rows': 1, 'cols': 4, 'labels': ['舵机1', '舵机2', '舵机3', '舵机4']},
-                    SubState.PID: {'rows': 7, 'cols': 6, 'labels': ['PID组选择'] + ['kp', 'ki', 'kd', '积分限幅', '正输出限幅', '负输出限幅']},
+                    SubState.PID: {'rows': 7, 'cols': 6, 'labels': [
+                        # 第0行：内环主翼
+                        ['内环主翼-kp', '内环主翼-ki', '内环主翼-kd', '内环主翼-积分限幅', '内环主翼-正输出限幅', '内环主翼-负输出限幅'],
+                        # 第1行：内环尾翼
+                        ['内环尾翼-kp', '内环尾翼-ki', '内环尾翼-kd', '内环尾翼-积分限幅', '内环尾翼-正输出限幅', '内环尾翼-负输出限幅'],
+                        # 第2行：姿态环-roll
+                        ['姿态环-roll-kp', '姿态环-roll-ki', '姿态环-roll-kd', '姿态环-roll-积分限幅', '姿态环-roll-正输出限幅', '姿态环-roll-负输出限幅'],
+                        # 第3行：姿态环-pitch
+                        ['姿态环-pitch-kp', '姿态环-pitch-ki', '姿态环-pitch-kd', '姿态环-pitch-积分限幅', '姿态环-pitch-正输出限幅', '姿态环-pitch-负输出限幅'],
+                        # 第4行：姿态环-yaw
+                        ['姿态环-yaw-kp', '姿态环-yaw-ki', '姿态环-yaw-kd', '姿态环-yaw-积分限幅', '姿态环-yaw-正输出限幅', '姿态环-yaw-负输出限幅'],
+                        # 第5行：外环-yaw
+                        ['外环-yaw-kp', '外环-yaw-ki', '外环-yaw-kd', '外环-yaw-积分限幅', '外环-yaw-正输出限幅', '外环-yaw-负输出限幅'],
+                        # 第6行：外环-高度
+                        ['外环-高度-kp', '外环-高度-ki', '外环-高度-kd', '外环-高度-积分限幅', '外环-高度-正输出限幅', '外环-高度-负输出限幅']
+                    ]},
                     SubState.JACOBIAN: {'rows': 3, 'cols': 4, 'labels': ['J[0,0]', 'J[0,1]', 'J[0,2]', 'J[0,3]', 
                                                                         'J[1,0]', 'J[1,1]', 'J[1,2]', 'J[1,3]',
                                                                         'J[2,0]', 'J[2,1]', 'J[2,2]', 'J[2,3]']}
@@ -555,9 +574,6 @@ class StateMachineManager:
                     # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
                     self.data.pid_tuning_state = -1
                     print("进入PID调参模式，当前状态：不改 (0x00)")
-                    # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
-                    self.data.pid_tuning_state = -1
-                    print("进入PID调参模式，当前状态：不改 (0x00)")
                 elif self.data.nav_row == 2:
                     self.data.set_sub_state(SubState.JACOBIAN)
                 
@@ -571,25 +587,19 @@ class StateMachineManager:
             else:
                 # 在确认状态下，Enter用于确认参数选择或进入下一个参数
                 if self.data.sub_state == SubState.PID:
-                    # 在PID模式下，Enter用于确认当前的PID种类
-                    # 根据当前导航位置确定选中的PID组
-                    if self.data.nav_row == 0:
-                        # 在第0行（PID组选择行），nav_col表示PID组索引
-                        if 0 <= self.data.nav_col < 7:
-                            self.data.selected_pid = self.data.nav_col
-                            # 更新pid_tuning_state为选中的PID组索引
-                            self.data.pid_tuning_state = self.data.nav_col
-                            print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
-                            print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
-                    else:
-                        # 在其他行（具体参数行），nav_row-1表示PID组索引
-                        pid_index = self.data.nav_row - 1
-                        if 0 <= pid_index < 7:
-                            self.data.selected_pid = pid_index
-                            # 更新pid_tuning_state为选中的PID组索引
-                            self.data.pid_tuning_state = pid_index
-                            print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
-                            print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
+                    # 在PID模式下，Enter用于更新pid_tuning_state（数据包第三字节）
+                    current_pid = self.data.nav_row  # 当前导航行对应的PID组
+                    
+                    if 0 <= current_pid <= 6:
+                        # 更新pid_tuning_state为当前PID组
+                        old_state = self.data.pid_tuning_state
+                        self.data.pid_tuning_state = current_pid
+                        self.data.selected_pid = current_pid
+                        
+                        old_encoding = PID_TYPE_ENCODING.get(old_state, 0x00)
+                        new_encoding = PID_TYPE_ENCODING.get(current_pid, 0x00)
+                        print(f"Enter键：数据包第三字节从 0x{old_encoding:02X} 切换到 0x{new_encoding:02X}")
+                        print(f"当前发送PID组：{self.data.pid_name[current_pid]}")
                     
                     # 不退出确认状态，让用户可以继续调整参数
                     # 如果需要退出确认状态，可以按Esc键
@@ -638,22 +648,15 @@ class StateMachineManager:
         if self.data.main_state == MainState.TUNING:
             if self.data.sub_state == SubState.PID:
                 # 在PID调参模式下，数字用于修改参数值
-                if self.data.nav_row == 0:
-                    # 在第0行（PID组选择行），数字用于选择PID组
-                    if 0 <= number < 7:
-                        self.data.selected_pid = number
-                        self.data.nav_col = number  # 更新导航列以匹配选择的PID组
-                        # 更新pid_tuning_state为选中的PID组索引
-                        self.data.pid_tuning_state = number
-                        print(f"已选择PID组: {self.data.pid_name[self.data.selected_pid]}")
-                        print(f"PID调参状态更新为: {self.data.pid_tuning_state} (编码: {PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00):02X})")
-                else:
-                    # 在其他行（具体参数行），数字用于修改当前选中的PID组的参数值
-                    param_index = self.data.nav_col
-                    if 0 <= self.data.selected_pid < 7 and 0 <= param_index < 6:
-                        # 将数字转换为浮点数作为参数值
-                        self.data.pid_param[self.data.selected_pid][param_index] = float(number)
-                        print(f"已设置PID[{self.data.selected_pid}].{self.data.param_names[param_index]} = {number}")
+                pid_index = self.data.nav_row  # 0-6
+                param_index = self.data.nav_col  # 0-5
+                
+                if 0 <= pid_index < 7 and 0 <= param_index < 6:
+                    # 直接设置参数值
+                    self.data.pid_param[pid_index][param_index] = float(number)
+                    # 同时更新selected_pid为当前PID组
+                    self.data.selected_pid = pid_index
+                    print(f"设置 PID[{pid_index}].{self.data.param_names[param_index]} = {number}")
             elif self.data.sub_state == SubState.JACOBIAN:
                 # 在Jacobian调参模式下，数字用于输入矩阵值
                 row = self.data.nav_row
@@ -681,8 +684,9 @@ class StateMachineManager:
             # 在TUNING模式的确认状态下，Esc退出确认状态
             # 如果是PID调参模式，重置pid_tuning_state为-1（"不改"状态）
             if self.data.sub_state == SubState.PID:
+                old_encoding = PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00)
                 self.data.pid_tuning_state = -1
-                print("退出PID调参确认状态，重置为不改状态 (0x00)")
+                print(f"Esc键：数据包第三字节从 0x{old_encoding:02X} 重置为 0x00（不改状态）")
             
             self.data.nav_confirm = False
             self.data.nav_row = 0
@@ -728,17 +732,13 @@ class StateMachineManager:
                     if 0 <= self.data.nav_col < 4:
                         return f"舵机{self.data.nav_col + 1}: {self.data.servo_angles[self.data.nav_col]:.2f}"
                 elif self.data.sub_state == SubState.PID:
-                    if self.data.nav_row == 0:
-                        # PID组选择
-                        return f"PID组: {self.data.pid_name[self.data.nav_col]}"
-                    else:
-                        # 具体参数
-                        pid_index = self.data.nav_row - 1
+                    if 0 <= self.data.nav_row < 7 and 0 <= self.data.nav_col < 6:
+                        pid_index = self.data.nav_row
                         param_index = self.data.nav_col
-                        if 0 <= pid_index < 7 and 0 <= param_index < 6:
-                            param_name = self.data.param_names[param_index]
-                            param_value = self.data.pid_param[pid_index][param_index]
-                            return f"PID[{pid_index}].{param_name}: {param_value:.2f}"
+                        param_name = self.data.param_names[param_index]
+                        param_value = self.data.pid_param[pid_index][param_index]
+                        pid_state = "不改" if self.data.pid_tuning_state == -1 else self.data.pid_name[self.data.pid_tuning_state]
+                        return f"PID[{pid_index}].{param_name}: {param_value:.2f} (发送组: {pid_state})"
                 elif self.data.sub_state == SubState.JACOBIAN:
                     if 0 <= self.data.nav_row < 3 and 0 <= self.data.nav_col < 4:
                         value = self.data.jacobian_matrix[self.data.nav_row][self.data.nav_col]
