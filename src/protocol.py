@@ -112,7 +112,7 @@ class AutoEncoder(EncoderBase):
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x01)  # AUTO状态标识
-        packet.append(data.main_switch & 0xFF)
+        
         packet.extend(struct.pack('<h', data.fan_speed))
         
         for angle in data.servo_angles:
