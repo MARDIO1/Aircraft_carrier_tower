@@ -92,6 +92,14 @@ class PlayerInput:
             elif key == 'space':
                 self._toggle_main_switch()
             
+            # 'D'键：在STOP模式下直接切换到DATA模式
+            elif key == 'd' and self.shared_data.main_state == MainState.STOP:
+                self._switch_to_data()
+            
+            # 'L'键：在DATA模式下切换黑箱记录状态
+            elif key == 'l' and self.shared_data.main_state == MainState.DATA:
+                self._toggle_blackbox_logging()
+            
             # 数字输入
             elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
                 number = int(key)
@@ -172,6 +180,44 @@ class PlayerInput:
         """切换到TUNING状态"""
         if self.shared_data.set_main_state(MainState.TUNING):
             self._clear_input_buffer()
+    
+    def _switch_to_data(self):
+        """切换到DATA状态"""
+        if self.shared_data.set_main_state(MainState.DATA):
+            self._clear_input_buffer()
+            print("已切换到DATA模式")
+            # 自动开始黑箱记录
+            self._start_blackbox_logging()
+    
+    def _toggle_blackbox_logging(self):
+        """切换黑箱记录状态"""
+        # 这个方法需要在外部设置uart_receiver引用
+        if hasattr(self, 'uart_receiver') and self.uart_receiver:
+            if self.uart_receiver.toggle_blackbox_logging():
+                status = self.uart_receiver.get_blackbox_logging_status()
+                if status['is_logging']:
+                    print(f"开始黑箱记录 ({status['record_count']}/{status['max_records']})")
+                else:
+                    print(f"停止黑箱记录 (共记录{status['record_count']}条)")
+            else:
+                print("黑箱记录切换失败")
+        else:
+            print("未找到UART接收器，无法控制黑箱记录")
+    
+    def _start_blackbox_logging(self):
+        """开始黑箱记录"""
+        if hasattr(self, 'uart_receiver') and self.uart_receiver:
+            if self.uart_receiver.start_blackbox_logging():
+                status = self.uart_receiver.get_blackbox_logging_status()
+                print(f"自动开始黑箱记录 ({status['record_count']}/{status['max_records']})")
+            else:
+                print("黑箱记录已在进行中")
+        else:
+            print("未找到UART接收器，无法开始黑箱记录")
+    
+    def set_uart_receiver(self, uart_receiver):
+        """设置UART接收器引用，用于控制黑箱记录"""
+        self.uart_receiver = uart_receiver
     
     # ==================== 输入处理方法 ====================
     

@@ -128,6 +128,8 @@ class Consle:
             mode_text = "模式:TOWER"
         elif main_state == MainState.TUNING:
             mode_text = "模式:TUNING"
+        elif main_state == MainState.DATA:
+            mode_text = "模式:DATA"
         else:
             mode_text = f"模式:{main_state.name}"
         
@@ -176,6 +178,8 @@ class Consle:
                     self.add_message("塔楼模式")
                 elif main_state == MainState.TUNING.value:
                     self.add_message("调参模式")
+                elif main_state == MainState.DATA.value:
+                    self.add_message("数据模式")
                     
             if switch != self.last_switch and self.last_switch is not None:
                 self.add_message(f"开关:{'ON' if switch == 1 else 'OFF'}")
@@ -198,33 +202,60 @@ class Consle:
             stdscr.addstr(row, 0, f"发送:错误{str(e)[:20]}")
 
     def _draw_receive_line(self, stdscr, row):
-        """第三行"""
+        """第三行：根据模式显示不同的接收数据"""
         if not self.shared_data:
             stdscr.addstr(row, 0, "接收:未连接")
             return
-        switch = self.shared_data.received_switch
-        roll = self.shared_data.received_angle_roll
-        pitch = self.shared_data.received_angle_pitch
-        yaw = self.shared_data.received_angle_yaw
-
-        has_data = (switch != 0 or 
-                   abs(roll) > 0.001 or 
-                   abs(pitch) > 0.001 or 
-                   abs(yaw) > 0.001)    
-
-        if has_data:
-            line = f"接收:开关={switch} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f})"
+        
+        # DATA模式：显示BlackBox数据第一行（角度和角速度）
+        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
+            angle = self.shared_data.blackbox_angle
+            gyro = self.shared_data.blackbox_gyro
+            line = f"角度(r,p,y)=({angle[0]:.3f},{angle[1]:.3f},{angle[2]:.3f}) "
+            line += f"角速度(x,y,z)=({gyro[0]:.3f},{gyro[1]:.3f},{gyro[2]:.3f})"
             stdscr.addstr(row, 0, line)
+        
+        # 其他模式：保持原有显示逻辑
         else:
-            stdscr.addstr(row, 0, "接收:无数据")
+            switch = self.shared_data.received_switch
+            roll = self.shared_data.received_angle_roll
+            pitch = self.shared_data.received_angle_pitch
+            yaw = self.shared_data.received_angle_yaw
+
+            has_data = (switch != 0 or 
+                       abs(roll) > 0.001 or 
+                       abs(pitch) > 0.001 or 
+                       abs(yaw) > 0.001)    
+
+            if has_data:
+                line = f"接收:开关={switch} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f})"
+                stdscr.addstr(row, 0, line)
+            else:
+                stdscr.addstr(row, 0, "接收:无数据")
     
     def _draw_tuning_line(self,stdscr,row):
-        """第四行：调参模式显示和导航信息"""
+        """第四行：根据模式显示不同的信息"""
         if not self.shared_data:
             return
         
-        # 只在TUNING模式下显示
-        if self.shared_data.main_state == MainState.TUNING:
+        # DATA模式：显示BlackBox数据第二行（加速度、期望角度、期望角速度、舵机）
+        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
+            acc = self.shared_data.blackbox_acc
+            target_angle = self.shared_data.blackbox_target_angle
+            target_w = self.shared_data.blackbox_target_w
+            rudder = self.shared_data.blackbox_rudder
+            
+            line = f"加速度(x,y,z)=({acc[0]:.3f},{acc[1]:.3f},{acc[2]:.3f}) "
+            line += f"期望角度=({target_angle[0]:.3f},{target_angle[1]:.3f},{target_angle[2]:.3f}) "
+            line += f"期望角速度=({target_w[0]:.3f},{target_w[1]:.3f},{target_w[2]:.3f}) "
+            line += f"舵机=[{rudder[0]:.3f},{rudder[1]:.3f},{rudder[2]:.3f},{rudder[3]:.3f}]"
+            
+            # 智能截断确保显示完整
+            line = self._truncate_line_for_display(stdscr, row, line)
+            stdscr.addstr(row, 0, line)
+        
+        # TUNING模式：保持原有显示逻辑
+        elif self.shared_data.main_state == MainState.TUNING:
             sub_state = self.shared_data.sub_state
             nav_row = self.shared_data.nav_row
             nav_col = self.shared_data.nav_col
@@ -306,6 +337,8 @@ class Consle:
                 line = f"导航:行={nav_row},列={nav_col}"
                 line = self._truncate_line_for_display(stdscr, row, line)
                 stdscr.addstr(row,0,line)
+        
+        # 其他模式：保持原有显示逻辑
         else:
             # 非TUNING模式显示导航提示
             nav_row = self.shared_data.nav_row

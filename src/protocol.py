@@ -28,6 +28,7 @@ class MainState(Enum):
     AUTO = 0x01      # 自动控制
     TOWER = 0x02     # 塔台控制
     TUNING = 0x03    # 调参模式
+    DATA = 0xB1      # 数据模式（发送0xB1，接收BlackBox数据）
 
 class SubState(Enum):
     """子状态枚举（仅用于TUNING模式）"""
@@ -103,7 +104,19 @@ class StopEncoder(EncoderBase):
     
     def get_packet_length(self) -> int:
         return 3
-
+class DataEncoder(EncoderBase):
+    """STOP状态编码器"""
+    
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码STOP状态数据：0xAA + 0xB1 + 0xBB (3字节)"""
+        packet = bytearray()
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0xB1)  # STOP状态
+        packet.append(0xBB)  # END_BYTE
+        return packet
+    
+    def get_packet_length(self) -> int:
+        return 3
 class AutoEncoder(EncoderBase):
     """AUTO状态编码器"""
     
@@ -234,6 +247,7 @@ class EncoderFactory:
         MainState.STOP: StopEncoder(),
         MainState.AUTO: AutoEncoder(),
         MainState.TOWER: TowerEncoder(),
+        MainState.DATA: DataEncoder(),  # 新增DATA模式编码器
         SubState.SERVO: ServoEncoder(),
         SubState.PID: PIDEncoder(),
         SubState.JACOBIAN: JacobianEncoder(),
@@ -304,7 +318,16 @@ class ProtocolData:
         # PID调参状态：-1表示"不改"状态，0-6表示正在调整的PID组
         self.pid_tuning_state = -1  # 初始为"不改"状态
         
-        # 接收数据
+        # BlackBox数据字段
+        self.blackbox_angle = [0.0, 0.0, 0.0]           # 角度 (roll, pitch, yaw)
+        self.blackbox_gyro = [0.0, 0.0, 0.0]            # 角速度
+        self.blackbox_acc = [0.0, 0.0, 0.0]             # 加速度
+        self.blackbox_target_angle = [0.0, 0.0, 0.0]    # 期望角度
+        self.blackbox_target_w = [0.0, 0.0, 0.0]        # 期望角速度
+        self.blackbox_rudder = [0.0, 0.0, 0.0, 0.0]     # 舵机目标角度
+        self.blackbox_received = False                  # 是否接收到BlackBox数据
+        
+        # 接收数据（保留字段，但不再使用普通数据包）
         self.received_switch = 0
         self.received_angle_roll = 0.0
         self.received_angle_pitch = 0.0
@@ -346,10 +369,11 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
 
 def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     """
-    解码从航模接收到的数据包
-    格式: 0xCC + uint8开关 + float[3]角度 + 0xDD (15字节)
+    解码BlackBox数据包 (78字节)
+    格式: 0xCC + float[3]角度 + float[3]角速度 + float[3]加速度 + 
+          float[3]期望角度 + float[3]期望角速度 + float[4]舵机目标角度 + 0xDD
     """
-    if len(packet) != 15:
+    if len(packet) != 78:
         return None
     
     if packet[0] != 0xCC or packet[-1] != 0xDD:
@@ -358,12 +382,42 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     data = ProtocolData()
     
     try:
-        data.received_switch = packet[1]
-        data.received_angle_roll, data.received_angle_pitch, data.received_angle_yaw = struct.unpack('<fff', packet[2:14])
+        offset = 1  # 跳过帧头0xCC
+        
+        # 角度 (3个float)
+        data.blackbox_angle = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
+        
+        # 角速度 (3个float)
+        data.blackbox_gyro = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
+        
+        # 加速度 (3个float)
+        data.blackbox_acc = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
+        
+        # 期望角度 (3个float)
+        data.blackbox_target_angle = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
+        
+        # 期望角速度 (3个float)
+        data.blackbox_target_w = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
+        
+        # 舵机目标角度 (4个float)
+        data.blackbox_rudder = list(struct.unpack('<ffff', packet[offset:offset+16]))
+        offset += 16
+        
+        # 验证帧尾（应该已经是0xDD）
+        if packet[offset] != 0xDD:
+            return None
+        
+        data.blackbox_received = True
         data.last_received_time = time.time()
         return data
+        
     except Exception as e:
-        print(f"数据解码错误: {e}")
+        print(f"BlackBox数据解码错误: {e}")
         return None
 
 # ==================== 状态机管理类 ====================
@@ -378,10 +432,10 @@ class StateMachineManager:
         # 导航配置 - 修复版
         self.nav_config = {
             MainState.STOP: {
-                'rows': 3,  # 行数：AUTO、TOWER、TUNING三个选项
+                'rows': 4,  # 行数：AUTO、TOWER、TUNING、DATA四个选项
                 'cols': 1,  # 列数：一维数组
-                'labels': ['切换到AUTO模式', '切换到TOWER模式', '切换到TUNING模式'],
-                'target_states': [MainState.AUTO, MainState.TOWER, MainState.TUNING]
+                'labels': ['切换到AUTO模式', '切换到TOWER模式', '切换到TUNING模式', '切换到DATA模式'],
+                'target_states': [MainState.AUTO, MainState.TOWER, MainState.TUNING, MainState.DATA]
             },
             MainState.AUTO: {
                 'rows': 0,  # 行数：只有参数行

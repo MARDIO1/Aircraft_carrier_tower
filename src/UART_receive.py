@@ -7,6 +7,7 @@ import threading
 import time
 import struct
 from protocol import decode_data
+from blackbox_logger import BlackBoxLogger
 
 class UARTReceiver:
     def __init__(self, serial_port, shared_data):
@@ -24,6 +25,9 @@ class UARTReceiver:
         self.last_receive_time = None
         self.receive_count = 0
         self.error_count = 0
+        
+        # 初始化黑箱记录器
+        self.blackbox_logger = BlackBoxLogger(max_records=2000)
         
     def start_receiving(self):
         """开始接收数据"""
@@ -62,75 +66,76 @@ class UARTReceiver:
                 time.sleep(0.1)  # 出错后稍作等待
                 
     def _process_received_data(self, data):
-        """处理接收到的原始数据"""
+        """处理接收到的原始数据，只处理78字节BlackBox数据包"""
         if not data:
             return
             
         # 将数据添加到缓冲区
         self.receive_buffer.extend(data)
         
-        # 尝试从缓冲区中提取完整的数据包
-        while len(self.receive_buffer) >= 15:  # 数据包最小长度
-            # 查找起始字节 0xCC
+        # 尝试从缓冲区中提取完整的78字节数据包
+        while len(self.receive_buffer) >= 78:
+            # 查找帧头 0xCC
             start_idx = -1
-            for i in range(len(self.receive_buffer) - 14):  # 需要至少39字节
-                if self.receive_buffer[i] == 0xCC:  # RECV_START_BYTE
+            for i in range(len(self.receive_buffer) - 77):  # 需要至少78字节
+                if self.receive_buffer[i] == 0xCC:  # 帧头
                     start_idx = i
                     break
             
             if start_idx == -1:
-                # 没有找到起始字节，清空缓冲区
+                # 没有找到帧头，清空缓冲区
                 self.receive_buffer.clear()
                 return
                 
-            # 检查是否有完整的数据包
-            if start_idx + 15 > len(self.receive_buffer):
+            # 检查是否有完整的78字节数据包
+            if start_idx + 78 > len(self.receive_buffer):
                 # 数据包不完整，等待更多数据
-                # 移除起始字节之前的数据
                 if start_idx > 0:
                     self.receive_buffer = self.receive_buffer[start_idx:]
                 return
                 
             # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 15])
+            packet = bytes(self.receive_buffer[start_idx:start_idx + 78])
             
-            # 检查结束字节
-            if packet[-1] == 0xDD:  # RECV_END_BYTE
-                # 解码数据包
-                decoded_data = decode_data(packet)
-                if decoded_data:
-                    self._update_shared_data(decoded_data)
-                    self.receive_count += 1
-                    self.last_receive_time = time.time()
-                else:
-                    self.error_count += 1
-                
-                # 从缓冲区中移除已处理的数据包
-                self.receive_buffer = self.receive_buffer[start_idx + 15:]
-            else:
-                # 结束字节不匹配，跳过这个起始字节
+            # 检查帧尾
+            if packet[-1] != 0xDD:  # 帧尾不匹配
+                # 帧尾不匹配，跳过这个帧头
                 self.receive_buffer = self.receive_buffer[start_idx + 1:]
+                continue
+            
+            # 解码数据包
+            decoded_data = decode_data(packet)
+            if decoded_data:
+                self._update_shared_data(decoded_data)
+                self.receive_count += 1
+                self.last_receive_time = time.time()
+            else:
+                self.error_count += 1
+            
+            # 从缓冲区中移除已处理的数据包
+            self.receive_buffer = self.receive_buffer[start_idx + 78:]
                 
     def _update_shared_data(self, decoded_data):
-        """将解码后的数据更新到共享数据结构中"""
+        """将解码后的BlackBox数据更新到共享数据结构中"""
         try:
-            # 更新接收到的开关状态
-            self.shared_data.received_switch = decoded_data.received_switch
-            
-            # 更新加速度数据
-            
-            # 更新陀螺仪数据
-            #self.shared_data.received_gyro_x = decoded_data.received_gyro_x
-           # self.shared_data.received_gyro_y = decoded_data.received_gyro_y
-            #self.shared_data.received_gyro_z = decoded_data.received_gyro_z
-            
-            # 更新角度数据
-            self.shared_data.received_angle_roll = decoded_data.received_angle_roll
-            self.shared_data.received_angle_pitch = decoded_data.received_angle_pitch
-            self.shared_data.received_angle_yaw = decoded_data.received_angle_yaw
+            # 更新BlackBox数据
+            self.shared_data.blackbox_angle = decoded_data.blackbox_angle
+            self.shared_data.blackbox_gyro = decoded_data.blackbox_gyro
+            self.shared_data.blackbox_acc = decoded_data.blackbox_acc
+            self.shared_data.blackbox_target_angle = decoded_data.blackbox_target_angle
+            self.shared_data.blackbox_target_w = decoded_data.blackbox_target_w
+            self.shared_data.blackbox_rudder = decoded_data.blackbox_rudder
+            self.shared_data.blackbox_received = True
             
             # 更新最后接收时间
             self.shared_data.last_received_time = decoded_data.last_received_time
+            
+            # 记录到黑箱文件
+            if self.blackbox_logger:
+                self.blackbox_logger.log_data(
+                    decoded_data.last_received_time,
+                    decoded_data
+                )
             
         except Exception as e:
             print(f"更新共享数据错误: {e}")
@@ -150,9 +155,44 @@ class UARTReceiver:
         
     def get_received_data_summary(self):
         """获取接收数据的摘要信息"""
+        if self.shared_data.blackbox_received:
+            return {
+                "angle": f"[{self.shared_data.blackbox_angle[0]:.3f}, {self.shared_data.blackbox_angle[1]:.3f}, {self.shared_data.blackbox_angle[2]:.3f}]",
+                "gyro": f"[{self.shared_data.blackbox_gyro[0]:.3f}, {self.shared_data.blackbox_gyro[1]:.3f}, {self.shared_data.blackbox_gyro[2]:.3f}]",
+                "acc": f"[{self.shared_data.blackbox_acc[0]:.3f}, {self.shared_data.blackbox_acc[1]:.3f}, {self.shared_data.blackbox_acc[2]:.3f}]",
+                "target_angle": f"[{self.shared_data.blackbox_target_angle[0]:.3f}, {self.shared_data.blackbox_target_angle[1]:.3f}, {self.shared_data.blackbox_target_angle[2]:.3f}]",
+                "rudder": f"[{self.shared_data.blackbox_rudder[0]:.3f}, {self.shared_data.blackbox_rudder[1]:.3f}, {self.shared_data.blackbox_rudder[2]:.3f}, {self.shared_data.blackbox_rudder[3]:.3f}]"
+            }
+        else:
+            return {
+                "status": "未接收到BlackBox数据"
+            }
+            
+    def start_blackbox_logging(self):
+        """开始黑箱记录（进入DATA模式时调用）"""
+        if self.blackbox_logger:
+            return self.blackbox_logger.start_logging()
+        return False
+    
+    def stop_blackbox_logging(self):
+        """停止黑箱记录"""
+        if self.blackbox_logger:
+            return self.blackbox_logger.stop_logging()
+        return False
+    
+    def toggle_blackbox_logging(self):
+        """切换黑箱记录状态（L键功能）"""
+        if self.blackbox_logger:
+            return self.blackbox_logger.toggle_logging()
+        return False
+    
+    def get_blackbox_logging_status(self):
+        """获取黑箱记录状态"""
+        if self.blackbox_logger:
+            return self.blackbox_logger.get_status()
         return {
-            "switch": self.shared_data.received_switch,
-            #"acceleration": f"[{self.shared_data.received_acc_x:.2f}, {self.shared_data.received_acc_y:.2f}, {self.shared_data.received_acc_z:.2f}]",
-           # "gyro": f"[{self.shared_data.received_gyro_x:.2f}, {self.shared_data.received_gyro_y:.2f}, {self.shared_data.received_gyro_z:.2f}]",
-            "angles": f"[{self.shared_data.received_angle_roll:.2f}, {self.shared_data.received_angle_pitch:.2f}, {self.shared_data.received_angle_yaw:.2f}]"
+            'is_logging': False,
+            'record_count': 0,
+            'max_records': 2000,
+            'remaining': 0
         }
