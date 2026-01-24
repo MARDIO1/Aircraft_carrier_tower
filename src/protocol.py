@@ -417,13 +417,14 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         return data
         
     except Exception as e:
-        print(f"BlackBox数据解码错误: {e}")
+        print(f"数据解码错误: {e}")
         return None
 
 # ==================== 状态机管理类 ====================
 
 class StateMachineManager:
     """状态机管理器"""
+    
     
     def __init__(self, protocol_data: ProtocolData):
         self.data = protocol_data

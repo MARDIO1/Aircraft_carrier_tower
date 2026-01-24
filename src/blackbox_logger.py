@@ -122,6 +122,7 @@ class BlackBoxLogger:
             bool: 是否成功记录
         """
         if not self.is_logging or self.record_count >= self.max_records:
+            print(f"记录器状态: is_logging={self.is_logging}, record_count={self.record_count}, max_records={self.max_records}")
             return False
             
         try:
@@ -155,7 +156,16 @@ class BlackBoxLogger:
             
             # 写入CSV
             self.csv_writer.writerow(row)
+            
+            # 立即flush确保数据写入磁盘
+            if self.log_file:
+                self.log_file.flush()
+            
             self.record_count += 1
+            
+            # 调试信息
+            if self.record_count % 100 == 0:
+                print(f"已记录 {self.record_count} 条数据到CSV")
             
             # 检查是否达到上限
             if self.record_count >= self.max_records:
@@ -167,6 +177,8 @@ class BlackBoxLogger:
             
         except Exception as e:
             print(f"记录数据失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def get_status(self) -> Dict[str, Any]:
@@ -189,8 +201,9 @@ class BlackBoxLogger:
             try:
                 self.log_file.flush()
                 self.log_file.close()
-            except:
-                pass
+                print(f"文件已关闭: {self.log_file.name}")
+            except Exception as e:
+                print(f"关闭文件时出错: {e}")
             finally:
                 self.log_file = None
                 self.csv_writer = None

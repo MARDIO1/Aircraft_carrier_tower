@@ -49,6 +49,9 @@ class AircraftCarrierTower:
             # 初始化串口接收器
             self.uart_receiver = UARTReceiver(self.initializer.serial_port, self.shared_data)
             
+            # 将UART接收器传递给PlayerInput，用于控制黑箱记录
+            self.player_input.set_uart_receiver(self.uart_receiver)
+            
             # 初始化控制台GUI
             self.terminal_gui = Consle(self.uart_sender, self.initializer, self.player_input, self.shared_data)
             
