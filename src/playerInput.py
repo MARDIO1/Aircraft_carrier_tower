@@ -357,8 +357,12 @@ class PlayerInput:
             if preset["main_switch"] == 0:
                 self.shared_data.set_main_state(MainState.STOP)
             else:
-                self.shared_data.set_main_state(MainState.AUTO)
-    
+                current_state = self.shared_data.main_state
+                if current_state in [MainState.AUTO,MainState.TOWER]:
+                    pass
+                else:
+                    self.shared_data.set_main_state(MainState.AUTO)
+                
     # ==================== 获取状态方法 ====================
     
     def get_current_input(self):
