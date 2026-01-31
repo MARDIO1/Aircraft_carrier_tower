@@ -66,18 +66,18 @@ class UARTReceiver:
                 time.sleep(0.1)  # 出错后稍作等待
                 
     def _process_received_data(self, data):
-        """处理接收到的原始数据，只处理78字节BlackBox数据包"""
+        """处理接收到的原始数据，只处理59字节BlackBox数据包"""
         if not data:
             return
             
         # 将数据添加到缓冲区
         self.receive_buffer.extend(data)
         
-        # 尝试从缓冲区中提取完整的78字节数据包
-        while len(self.receive_buffer) >= 78:
+        # 尝试从缓冲区中提取完整的59字节数据包
+        while len(self.receive_buffer) >= 59:
             # 查找帧头 0xCC
             start_idx = -1
-            for i in range(len(self.receive_buffer) - 77):  # 需要至少78字节
+            for i in range(len(self.receive_buffer) - 58):  # 需要至少59字节
                 if self.receive_buffer[i] == 0xCC:  # 帧头
                     start_idx = i
                     break
@@ -87,20 +87,20 @@ class UARTReceiver:
                 self.receive_buffer.clear()
                 return
                 
-            # 检查是否有完整的78字节数据包
-            if start_idx + 78 > len(self.receive_buffer):
+            # 检查是否有完整的59字节数据包
+            if start_idx + 59 > len(self.receive_buffer):
                 # 数据包不完整，等待更多数据
                 if start_idx > 0:
                     self.receive_buffer = self.receive_buffer[start_idx:]
                 return
                 
             # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 78])
+            packet = bytes(self.receive_buffer[start_idx:start_idx + 59])
             
             # 检查帧尾
             if packet[-1] != 0xDD:  # 帧尾不匹配
                 # 帧尾不匹配，跳过这个帧头
-                self.receive_buffer = self.receive_buffer[start_idx + 1:]
+                self.receive_buffer = self.receive_buffer[start_idx + 59:]
                 continue
             
             # 解码数据包
@@ -113,17 +113,16 @@ class UARTReceiver:
                 self.error_count += 1
             
             # 从缓冲区中移除已处理的数据包
-            self.receive_buffer = self.receive_buffer[start_idx + 78:]
+            self.receive_buffer = self.receive_buffer[start_idx + 59:]
                 
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中"""
         try:
-            # 更新BlackBox数据
+            # 更新BlackBox数据 - 只更新59字节数据包中实际包含的字段
+            self.shared_data.blackbox_timestamp = decoded_data.blackbox_timestamp
             self.shared_data.blackbox_angle = decoded_data.blackbox_angle
             self.shared_data.blackbox_gyro = decoded_data.blackbox_gyro
             self.shared_data.blackbox_acc = decoded_data.blackbox_acc
-            self.shared_data.blackbox_target_angle = decoded_data.blackbox_target_angle
-            self.shared_data.blackbox_target_w = decoded_data.blackbox_target_w
             self.shared_data.blackbox_rudder = decoded_data.blackbox_rudder
             self.shared_data.blackbox_received = True
             
@@ -132,8 +131,10 @@ class UARTReceiver:
             
             # 记录到黑箱文件
             if self.blackbox_logger:
+                # 传递数据包时间戳作为第一个参数（虽然log_data方法不再使用它）
+                # 保持向后兼容性
                 self.blackbox_logger.log_data(
-                    decoded_data.last_received_time,
+                    float(decoded_data.blackbox_timestamp),  # 转换为float以匹配方法签名
                     decoded_data
                 )
             
@@ -157,10 +158,10 @@ class UARTReceiver:
         """获取接收数据的摘要信息"""
         if self.shared_data.blackbox_received:
             return {
+                "packet_timestamp": str(self.shared_data.blackbox_timestamp),  # 数据包时间戳
                 "angle": f"[{self.shared_data.blackbox_angle[0]:.3f}, {self.shared_data.blackbox_angle[1]:.3f}, {self.shared_data.blackbox_angle[2]:.3f}]",
                 "gyro": f"[{self.shared_data.blackbox_gyro[0]:.3f}, {self.shared_data.blackbox_gyro[1]:.3f}, {self.shared_data.blackbox_gyro[2]:.3f}]",
                 "acc": f"[{self.shared_data.blackbox_acc[0]:.3f}, {self.shared_data.blackbox_acc[1]:.3f}, {self.shared_data.blackbox_acc[2]:.3f}]",
-                "target_angle": f"[{self.shared_data.blackbox_target_angle[0]:.3f}, {self.shared_data.blackbox_target_angle[1]:.3f}, {self.shared_data.blackbox_target_angle[2]:.3f}]",
                 "rudder": f"[{self.shared_data.blackbox_rudder[0]:.3f}, {self.shared_data.blackbox_rudder[1]:.3f}, {self.shared_data.blackbox_rudder[2]:.3f}, {self.shared_data.blackbox_rudder[3]:.3f}]"
             }
         else:

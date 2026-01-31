@@ -7,6 +7,8 @@ import struct
 import time
 from enum import Enum
 from typing import Optional, List, Tuple, Dict, Any
+from crc_calculator import add_crc8_to_packet
+from crc_calculator import extract_payload_with_crc, verify_crc8
 # PID类型编码映射
 PID_TYPE_ENCODING = {
     -1: 0x00,  # 不改状态
@@ -100,23 +102,28 @@ class StopEncoder(EncoderBase):
         packet.append(0xAA)  # START_BYTE
         packet.append(0x00)  # STOP状态
         packet.append(0xBB)  # END_BYTE
-        return packet
+
+        #加入crc
+        packet_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end= -1)
+
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 3
+        return 4
 class DataEncoder(EncoderBase):
-    """STOP状态编码器"""
+    """data状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
         """编码STOP状态数据：0xAA + 0xB1 + 0xBB (3字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
-        packet.append(0xB1)  # STOP状态
+        packet.append(0xB1)  # data态
         packet.append(0xBB)  # END_BYTE
-        return packet
+        packet_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end= -1)
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 3
+        return 4
 class AutoEncoder(EncoderBase):
     """AUTO状态编码器"""
     
@@ -132,10 +139,12 @@ class AutoEncoder(EncoderBase):
             packet.extend(struct.pack('<f', float(angle)))
         
         packet.append(0xBB)  # END_BYTE
-        return packet
+        packet_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
+
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 22
+        return 23
 
 class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
@@ -152,10 +161,11 @@ class TowerEncoder(EncoderBase):
             packet.extend(struct.pack('<f', float(angle)))
         
         packet.append(0xBB)  # END_BYTE
-        return packet
+        paceket_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
+        return paceket_with_crc
     
     def get_packet_length(self) -> int:
-        return 22
+        return 23
 
 class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""
@@ -171,10 +181,11 @@ class ServoEncoder(EncoderBase):
             packet.extend(struct.pack('<f', float(angle)))
         
         packet.append(0xBB)  # END_BYTE
-        return packet
+        packet_with_crc =add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 19
+        return 20
 
 class PIDEncoder(EncoderBase):
     """PID调参编码器"""
@@ -212,10 +223,12 @@ class PIDEncoder(EncoderBase):
                 packet.extend(struct.pack('<f', float(param_value)))
         
         packet.append(0xBB)  # END_BYTE
-        return packet
+        packet_with_crc =add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
+        return packet_with_crc
+        
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 1 + 6*4 + 1  # 0xAA + 0xA2 + pid_type_encoding + 6*float + 0xBB
+        return 1 + 1 + 1 + 6*4 + 1 +1 # 0xAA + 0xA2 + pid_type_encoding + 6*float + 0xBB
 
 class JacobianEncoder(EncoderBase):
     """Jacobian调参编码器"""
@@ -233,10 +246,11 @@ class JacobianEncoder(EncoderBase):
                 packet.extend(struct.pack('<f', float(value)))
         
         packet.append(0xBB)  # END_BYTE
-        return packet
+        packet_with_crc =add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 1 + 1 + 3*4*4 + 1  # 0xAA + 0xA3 + 12*float + 0xBB
+        return 1 + 1 + 3*4*4 + 1 +1  # 0xAA + 0xA3 + 12*float + 0xBB
 
 # ==================== 编码器工厂 ====================
 
@@ -318,12 +332,12 @@ class ProtocolData:
         # PID调参状态：-1表示"不改"状态，0-6表示正在调整的PID组
         self.pid_tuning_state = -1  # 初始为"不改"状态
         
-        # BlackBox数据字段
+        # 
+        self.blackbox_timestamp = 0
         self.blackbox_angle = [0.0, 0.0, 0.0]           # 角度 (roll, pitch, yaw)
         self.blackbox_gyro = [0.0, 0.0, 0.0]            # 角速度
         self.blackbox_acc = [0.0, 0.0, 0.0]             # 加速度
-        self.blackbox_target_angle = [0.0, 0.0, 0.0]    # 期望角度
-        self.blackbox_target_w = [0.0, 0.0, 0.0]        # 期望角速度
+      
         self.blackbox_rudder = [0.0, 0.0, 0.0, 0.0]     # 舵机目标角度
         self.blackbox_received = False                  # 是否接收到BlackBox数据
         
@@ -369,20 +383,25 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
 
 def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     """
-    解码BlackBox数据包 (78字节)
-    格式: 0xCC + float[3]角度 + float[3]角速度 + float[3]加速度 + 
-          float[3]期望角度 + float[3]期望角速度 + float[4]舵机目标角度 + 0xDD
+    解码BlackBox数据包 (59字节)
+    格式: 
     """
-    if len(packet) != 78:
+    if len(packet) != 59:
         return None
     
     if packet[0] != 0xCC or packet[-1] != 0xDD:
         return None
-    
+    if not verify_crc8(packet, crc_position=-2, calc_start=0):
+        print("CRC校验失败")
+        return None
     data = ProtocolData()
     
     try:
         offset = 1  # 跳过帧头0xCC
+        
+        #解码时间戳
+        data.blackbox_timestamp = struct.unpack('<I',packet[offset:offset+4])[0]
+        offset += 4
         
         # 角度 (3个float)
         data.blackbox_angle = list(struct.unpack('<fff', packet[offset:offset+12]))
@@ -392,22 +411,18 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         data.blackbox_gyro = list(struct.unpack('<fff', packet[offset:offset+12]))
         offset += 12
         
-        # 加速度 (3个float)
+        # 加速度(3个float)
         data.blackbox_acc = list(struct.unpack('<fff', packet[offset:offset+12]))
         offset += 12
-        
-        # 期望角度 (3个float)
-        data.blackbox_target_angle = list(struct.unpack('<fff', packet[offset:offset+12]))
-        offset += 12
-        
-        # 期望角速度 (3个float)
-        data.blackbox_target_w = list(struct.unpack('<fff', packet[offset:offset+12]))
-        offset += 12
+      
         
         # 舵机目标角度 (4个float)
         data.blackbox_rudder = list(struct.unpack('<ffff', packet[offset:offset+16]))
         offset += 16
-        
+        if offset != 57:
+            print(f"警告:解析偏移({offset})与预期(57)不符,可能错误")
+        crc_byte = packet[offset]
+        offset +=1
         # 验证帧尾（应该已经是0xDD）
         if packet[offset] != 0xDD:
             return None
@@ -415,7 +430,10 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         data.blackbox_received = True
         data.last_received_time = time.time()
         return data
-        
+    
+    except struct.error as e:
+        print(f"数据解包错误: {e}")
+        return None    
     except Exception as e:
         print(f"数据解码错误: {e}")
         return None

@@ -238,16 +238,12 @@ class Consle:
         if not self.shared_data:
             return
         
-        # DATA模式：显示BlackBox数据第二行（加速度、期望角度、期望角速度、舵机）
+        # DATA模式：显示BlackBox数据第二行（加速度、舵机）
         if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
             acc = self.shared_data.blackbox_acc
-            target_angle = self.shared_data.blackbox_target_angle
-            target_w = self.shared_data.blackbox_target_w
             rudder = self.shared_data.blackbox_rudder
             
             line = f"加速度(x,y,z)=({acc[0]:.3f},{acc[1]:.3f},{acc[2]:.3f}) "
-            line += f"期望角度=({target_angle[0]:.3f},{target_angle[1]:.3f},{target_angle[2]:.3f}) "
-            line += f"期望角速度=({target_w[0]:.3f},{target_w[1]:.3f},{target_w[2]:.3f}) "
             line += f"舵机=[{rudder[0]:.3f},{rudder[1]:.3f},{rudder[2]:.3f},{rudder[3]:.3f}]"
             
             # 智能截断确保显示完整

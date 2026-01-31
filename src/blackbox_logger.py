@@ -52,14 +52,13 @@ class BlackBoxLogger:
             self.log_file = open(filepath, 'w', newline='', encoding='utf-8')
             self.csv_writer = csv.writer(self.log_file)
             
-            # 写入CSV标题行
+            # 写入CSV标题行 - 只记录59字节数据包中实际包含的数据
+            # timestamp字段现在是数据包时间戳（4字节无符号整数）
             headers = [
-                'timestamp',
+                'packet_timestamp',  # 数据包时间戳（4字节无符号整数）
                 'angle_roll', 'angle_pitch', 'angle_yaw',
                 'gyro_x', 'gyro_y', 'gyro_z',
                 'acc_x', 'acc_y', 'acc_z',
-                'target_roll', 'target_pitch', 'target_yaw',
-                'target_wx', 'target_wy', 'target_wz',
                 'rudder1', 'rudder2', 'rudder3', 'rudder4'
             ]
             self.csv_writer.writerow(headers)
@@ -115,8 +114,8 @@ class BlackBoxLogger:
         记录一条BlackBox数据
         
         Args:
-            timestamp: 时间戳（秒）
-            protocol_data: 协议数据对象
+            timestamp: 时间戳（秒）- 保留参数用于向后兼容，但不再使用
+            protocol_data: 协议数据对象，包含数据包时间戳
             
         Returns:
             bool: 是否成功记录
@@ -126,13 +125,12 @@ class BlackBoxLogger:
             return False
             
         try:
-            # 格式化时间戳
-            dt = datetime.fromtimestamp(timestamp)
-            timestamp_str = dt.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # 保留毫秒
+            # 记录数据包时间戳（4字节无符号整数）
+            packet_timestamp = protocol_data.blackbox_timestamp
             
-            # 准备数据行，精度小数点后三位
+            # 准备数据行，精度小数点后三位 - 只记录59字节数据包中实际包含的数据
             row = [
-                timestamp_str,
+                str(packet_timestamp),  # 数据包时间戳（原始整数值）
                 f"{protocol_data.blackbox_angle[0]:.3f}",
                 f"{protocol_data.blackbox_angle[1]:.3f}",
                 f"{protocol_data.blackbox_angle[2]:.3f}",
@@ -142,12 +140,6 @@ class BlackBoxLogger:
                 f"{protocol_data.blackbox_acc[0]:.3f}",
                 f"{protocol_data.blackbox_acc[1]:.3f}",
                 f"{protocol_data.blackbox_acc[2]:.3f}",
-                f"{protocol_data.blackbox_target_angle[0]:.3f}",
-                f"{protocol_data.blackbox_target_angle[1]:.3f}",
-                f"{protocol_data.blackbox_target_angle[2]:.3f}",
-                f"{protocol_data.blackbox_target_w[0]:.3f}",
-                f"{protocol_data.blackbox_target_w[1]:.3f}",
-                f"{protocol_data.blackbox_target_w[2]:.3f}",
                 f"{protocol_data.blackbox_rudder[0]:.3f}",
                 f"{protocol_data.blackbox_rudder[1]:.3f}",
                 f"{protocol_data.blackbox_rudder[2]:.3f}",
@@ -228,11 +220,10 @@ def test_blackbox_logger():
     
     # 创建测试数据
     test_data = ProtocolData()
+    test_data.blackbox_timestamp = 1234567890  # 测试数据包时间戳
     test_data.blackbox_angle = [1.234567, 2.345678, 3.456789]
     test_data.blackbox_gyro = [4.567890, 5.678901, 6.789012]
     test_data.blackbox_acc = [7.890123, 8.901234, 9.012345]
-    test_data.blackbox_target_angle = [10.123456, 11.234567, 12.345678]
-    test_data.blackbox_target_w = [13.456789, 14.567890, 15.678901]
     test_data.blackbox_rudder = [16.789012, 17.890123, 18.901234, 19.012345]
     
     # 记录测试数据
