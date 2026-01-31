@@ -211,7 +211,10 @@ class Consle:
         if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
             angle = self.shared_data.blackbox_angle
             gyro = self.shared_data.blackbox_gyro
-            line = f"角度(r,p,y)=({angle[0]:.3f},{angle[1]:.3f},{angle[2]:.3f}) "
+            timestamp = self.shared_data.blackbox_timestamp
+            statemachine = self.shared_data.blackbox_statemachine
+            line = f"时间戳:{timestamp} 状态机:0x{statemachine:02X}({statemachine}) "
+            line += f"角度(r,p,y)=({angle[0]:.3f},{angle[1]:.3f},{angle[2]:.3f}) "
             line += f"角速度(x,y,z)=({gyro[0]:.3f},{gyro[1]:.3f},{gyro[2]:.3f})"
             stdscr.addstr(row, 0, line)
         

@@ -56,6 +56,7 @@ class BlackBoxLogger:
             # timestamp字段现在是数据包时间戳（4字节无符号整数）
             headers = [
                 'packet_timestamp',  # 数据包时间戳（4字节无符号整数）
+                'statemachine',
                 'angle_roll', 'angle_pitch', 'angle_yaw',
                 'gyro_x', 'gyro_y', 'gyro_z',
                 'acc_x', 'acc_y', 'acc_z',
@@ -131,6 +132,7 @@ class BlackBoxLogger:
             # 准备数据行，精度小数点后三位 - 只记录59字节数据包中实际包含的数据
             row = [
                 str(packet_timestamp),  # 数据包时间戳（原始整数值）
+                str(protocol_data.blackbox_statemachine),
                 f"{protocol_data.blackbox_angle[0]:.3f}",
                 f"{protocol_data.blackbox_angle[1]:.3f}",
                 f"{protocol_data.blackbox_angle[2]:.3f}",
