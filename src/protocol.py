@@ -5,6 +5,7 @@
 
 import struct
 import time
+from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Tuple, Dict, Any
 from crc_calculator import add_crc8_to_packet
@@ -128,10 +129,18 @@ class AutoEncoder(EncoderBase):
     """AUTO状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码AUTO状态数据：0xAA + 0x01 + uint8[1] + int16[1] + float32[4] + 0xBB (22字节)"""
+        """编码AUTO状态数据：0xAA + 0x01 + uint32timestamp + int16[1] + float32[4] + crc+0xBB (26字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x01)  # AUTO状态标识
+
+        ##时间戳相关
+        now = datetime.now()
+        midnight = now.replace(hour = 0,minute=0,second =0,microsecond=0)
+        ms_today = int((now-midnight).total_seconds()*1000)
+
+
+        packet.extend(struct.pack('<I',ms_today))
         
         packet.extend(struct.pack('<h', data.fan_speed))
         
@@ -144,7 +153,7 @@ class AutoEncoder(EncoderBase):
         return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 23
+        return 26
 
 class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
@@ -165,7 +174,7 @@ class TowerEncoder(EncoderBase):
         return paceket_with_crc
     
     def get_packet_length(self) -> int:
-        return 23
+        return 22
 
 class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""

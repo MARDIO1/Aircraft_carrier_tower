@@ -14,7 +14,7 @@ from protocol import ProtocolData
 class BlackBoxLogger:
     """BlackBox数据记录器"""
     
-    def __init__(self, max_records: int = 2000, log_dir: str = "blackbox_logs"):
+    def __init__(self, max_records: int =3000, log_dir: str = "blackbox_logs"):
         """
         初始化记录器
         

@@ -27,7 +27,7 @@ class UARTReceiver:
         self.error_count = 0
         
         # 初始化黑箱记录器
-        self.blackbox_logger = BlackBoxLogger(max_records=2000)
+        self.blackbox_logger = BlackBoxLogger(max_records=3000)
         
     def start_receiving(self):
         """开始接收数据"""
