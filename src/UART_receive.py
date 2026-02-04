@@ -74,10 +74,10 @@ class UARTReceiver:
         self.receive_buffer.extend(data)
         
         # 尝试从缓冲区中提取完整的59字节数据包
-        while len(self.receive_buffer) >= 60:
+        while len(self.receive_buffer) >= 64:
             # 查找帧头 0xCC
             start_idx = -1
-            for i in range(len(self.receive_buffer) - 59):  # 需要至少59字节
+            for i in range(len(self.receive_buffer) - 63):  # 需要至少59字节
                 if self.receive_buffer[i] == 0xCC:  # 帧头
                     start_idx = i
                     break
@@ -88,19 +88,19 @@ class UARTReceiver:
                 return
                 
             # 检查是否有完整的59字节数据包
-            if start_idx + 60 > len(self.receive_buffer):
+            if start_idx + 64 > len(self.receive_buffer):
                 # 数据包不完整，等待更多数据
                 if start_idx > 0:
                     self.receive_buffer = self.receive_buffer[start_idx:]
                 return
                 
             # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 60])
+            packet = bytes(self.receive_buffer[start_idx:start_idx + 64])
             
             # 检查帧尾
             if packet[-1] != 0xDD:  # 帧尾不匹配
                 # 帧尾不匹配，跳过这个帧头
-                self.receive_buffer = self.receive_buffer[start_idx + 60:]
+                self.receive_buffer = self.receive_buffer[start_idx + 64:]
                 continue
             
             # 解码数据包
@@ -113,12 +113,13 @@ class UARTReceiver:
                 self.error_count += 1
             
             # 从缓冲区中移除已处理的数据包
-            self.receive_buffer = self.receive_buffer[start_idx + 60:]
+            self.receive_buffer = self.receive_buffer[start_idx + 64:]
                 
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中"""
         try:
             # 更新BlackBox数据 - 只更新59字节数据包中实际包含的字段
+            self.shared_data.blackbox_timestamp2 = decoded_data.blackbox_timestamp2
             self.shared_data.blackbox_timestamp = decoded_data.blackbox_timestamp
             self.shared_data.blackbox_statemachine = decoded_data.blackbox_statemachine
             self.shared_data.blackbox_angle = decoded_data.blackbox_angle

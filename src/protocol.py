@@ -343,6 +343,7 @@ class ProtocolData:
         
         # 
         self.blackbox_timestamp = 0
+        self.blackbox_timestamp2 = 0
         self.blackbox_statemachine = 0
         self.blackbox_angle = [0.0, 0.0, 0.0]           # 角度 (roll, pitch, yaw)
         self.blackbox_gyro = [0.0, 0.0, 0.0]            # 角速度
@@ -393,10 +394,10 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
 
 def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     """
-    解码BlackBox数据包 (59字节)
+    解码BlackBox数据包 (64字节)
     格式: 
     """
-    if len(packet) != 60:
+    if len(packet) != 64:
         return None
     
     if packet[0] != 0xCC or packet[-1] != 0xDD:
@@ -412,6 +413,9 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         #解码时间戳
         data.blackbox_timestamp = struct.unpack('<I',packet[offset:offset+4])[0]
         offset += 4
+        data.blackbox_timestamp2 = struct.unpack('I',packet[offset:offset+4])[0]
+        offset +=4
+
         #解码状态机
         data.blackbox_statemachine = struct.unpack('<B',packet[offset:offset+1])[0]
         offset += 1
@@ -431,8 +435,8 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         # 舵机目标角度 (4个float)
         data.blackbox_rudder = list(struct.unpack('<ffff', packet[offset:offset+16]))
         offset += 16
-        if offset != 58:
-            print(f"警告:解析偏移({offset})与预期(57)不符,可能错误")
+        if offset != 62:
+            print(f"警告:解析偏移({offset})与预期(62)不符,可能错误")
         crc_byte = packet[offset]
         offset +=1
         # 验证帧尾（应该已经是0xDD）
