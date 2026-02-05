@@ -61,6 +61,7 @@ class BlackBoxLogger:
                 'angle_roll', 'angle_pitch', 'angle_yaw',
                 'gyro_x', 'gyro_y', 'gyro_z',
                 'acc_x', 'acc_y', 'acc_z',
+                'torque_x','torque_y','torque_z',
                 'rudder1', 'rudder2', 'rudder3', 'rudder4'
             ]
             self.csv_writer.writerow(headers)
@@ -144,6 +145,9 @@ class BlackBoxLogger:
                 f"{protocol_data.blackbox_acc[0]:.3f}",
                 f"{protocol_data.blackbox_acc[1]:.3f}",
                 f"{protocol_data.blackbox_acc[2]:.3f}",
+                f"{protocol_data.blackbox_torque[0]:.3f}",
+                f"{protocol_data.blackbox_torque[1]:.3f}",
+                f"{protocol_data.blackbox_torque[2]:.3f}",
                 f"{protocol_data.blackbox_rudder[0]:.3f}",
                 f"{protocol_data.blackbox_rudder[1]:.3f}",
                 f"{protocol_data.blackbox_rudder[2]:.3f}",

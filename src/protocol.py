@@ -348,7 +348,8 @@ class ProtocolData:
         self.blackbox_angle = [0.0, 0.0, 0.0]           # 角度 (roll, pitch, yaw)
         self.blackbox_gyro = [0.0, 0.0, 0.0]            # 角速度
         self.blackbox_acc = [0.0, 0.0, 0.0]             # 加速度
-      
+        self.blackbox_torque = [0.0,0.0,0.0]            #莫名奇妙的力矩
+
         self.blackbox_rudder = [0.0, 0.0, 0.0, 0.0]     # 舵机目标角度
         self.blackbox_received = False                  # 是否接收到BlackBox数据
         
@@ -394,10 +395,10 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
 
 def decode_data(packet: bytearray) -> Optional[ProtocolData]:
     """
-    解码BlackBox数据包 (64字节)
+    解码BlackBox数据包 (76字节)
     格式: 
     """
-    if len(packet) != 64:
+    if len(packet) != 76:
         return None
     
     if packet[0] != 0xCC or packet[-1] != 0xDD:
@@ -430,13 +431,15 @@ def decode_data(packet: bytearray) -> Optional[ProtocolData]:
         # 加速度(3个float)
         data.blackbox_acc = list(struct.unpack('<fff', packet[offset:offset+12]))
         offset += 12
-      
+        # sb力矩(3个float)
+        data.blackbox_torque = list(struct.unpack('<fff', packet[offset:offset+12]))
+        offset += 12
         
         # 舵机目标角度 (4个float)
         data.blackbox_rudder = list(struct.unpack('<ffff', packet[offset:offset+16]))
         offset += 16
-        if offset != 62:
-            print(f"警告:解析偏移({offset})与预期(62)不符,可能错误")
+        if offset != 74:
+            print(f"警告:解析偏移({offset})与预期(74)不符,可能错误")
         crc_byte = packet[offset]
         offset +=1
         # 验证帧尾（应该已经是0xDD）

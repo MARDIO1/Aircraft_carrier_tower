@@ -66,18 +66,18 @@ class UARTReceiver:
                 time.sleep(0.1)  # 出错后稍作等待
                 
     def _process_received_data(self, data):
-        """处理接收到的原始数据，只处理59字节BlackBox数据包"""
+        """处理接收到的原始数据，只处理76字节BlackBox数据包"""
         if not data:
             return
             
         # 将数据添加到缓冲区
         self.receive_buffer.extend(data)
         
-        # 尝试从缓冲区中提取完整的59字节数据包
-        while len(self.receive_buffer) >= 64:
+        # 尝试从缓冲区中提取完整的76字节数据包
+        while len(self.receive_buffer) >= 76:
             # 查找帧头 0xCC
             start_idx = -1
-            for i in range(len(self.receive_buffer) - 63):  # 需要至少59字节
+            for i in range(len(self.receive_buffer) - 75):  # 需要至少59字节
                 if self.receive_buffer[i] == 0xCC:  # 帧头
                     start_idx = i
                     break
@@ -88,19 +88,19 @@ class UARTReceiver:
                 return
                 
             # 检查是否有完整的59字节数据包
-            if start_idx + 64 > len(self.receive_buffer):
+            if start_idx + 76 > len(self.receive_buffer):
                 # 数据包不完整，等待更多数据
                 if start_idx > 0:
                     self.receive_buffer = self.receive_buffer[start_idx:]
                 return
                 
             # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 64])
+            packet = bytes(self.receive_buffer[start_idx:start_idx + 76])
             
             # 检查帧尾
             if packet[-1] != 0xDD:  # 帧尾不匹配
                 # 帧尾不匹配，跳过这个帧头
-                self.receive_buffer = self.receive_buffer[start_idx + 64:]
+                self.receive_buffer = self.receive_buffer[start_idx + 76:]
                 continue
             
             # 解码数据包
@@ -113,7 +113,7 @@ class UARTReceiver:
                 self.error_count += 1
             
             # 从缓冲区中移除已处理的数据包
-            self.receive_buffer = self.receive_buffer[start_idx + 64:]
+            self.receive_buffer = self.receive_buffer[start_idx + 76:]
                 
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中"""
@@ -125,6 +125,7 @@ class UARTReceiver:
             self.shared_data.blackbox_angle = decoded_data.blackbox_angle
             self.shared_data.blackbox_gyro = decoded_data.blackbox_gyro
             self.shared_data.blackbox_acc = decoded_data.blackbox_acc
+            self.shared_data.blackbox_torque = decoded_data.blackbox_torque
             self.shared_data.blackbox_rudder = decoded_data.blackbox_rudder
             self.shared_data.blackbox_received = True
             
