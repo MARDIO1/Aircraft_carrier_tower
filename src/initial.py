@@ -11,7 +11,7 @@ class Initializer:
     def __init__(self):
         self.serial_port = None
         self.com_port = None
-        self.baud_rate = 115200
+        self.baud_rate = 500000
         self.protocol_data = ProtocolData()
         
     def list_available_ports(self):
