@@ -159,22 +159,21 @@ class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码TOWER状态数据：0xAA + 0x02  + int16[1]+ ++crc  + 0xBB (字节)"""
+        """编码TOWER状态数据：0xAA + 0x02  + int16[1]+ 5字节按键数据+crc  + 0xBB (字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x02)  # TOWER状态标识
       
         packet.extend(struct.pack('<h', data.fan_speed))
         
-        for angle in data.servo_angles:
-            packet.extend(struct.pack('<f', float(angle)))
+        packet.extend(data.tower_key_bits)
         
         packet.append(0xBB)  # END_BYTE
         paceket_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
         return paceket_with_crc
     
     def get_packet_length(self) -> int:
-        return 22
+        return 11
 
 class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""
@@ -295,7 +294,7 @@ class ProtocolData:
         self.main_switch = 0  # 总开关: 0=STOP, 1=AUTO, 2=TOWER
         self.fan_speed = 0    # 风扇转速
         self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度
-        
+        self.tower_key_bits = bytearray(5)
         # 调参参数
         self.selected_pid = 0  # 当前选中的PID索引
         self.selected_param = 0  # 当前选中的参数索引

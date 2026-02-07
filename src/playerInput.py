@@ -7,7 +7,23 @@ import keyboard
 import threading
 import time
 from protocol import ProtocolData, MainState, SubState, StateMachineManager
-
+TOWER_KEY_MAP = {
+    # 26个字母: bit 0-25
+    'a': 0,  'b': 1,  'c': 2,  'd': 3,  'e': 4,
+    'f': 5,  'g': 6,  'h': 7,  'i': 8,  'j': 9,
+    'k': 10, 'l': 11, 'm': 12, 'n': 13, 'o': 14,
+    'p': 15, 'q': 16, 'r': 17, 's': 18, 't': 19,
+    'u': 20, 'v': 21, 'w': 22, 'x': 23, 'y': 24,
+    'z': 25,
+    # 10个数字: bit 26-35
+    '0': 26, '1': 27, '2': 28, '3': 29, '4': 30,
+    '5': 31, '6': 32, '7': 33, '8': 34, '9': 35,
+    # 4个修饰键: bit 36-39
+    'shift': 36,
+    'ctrl': 37,
+    'alt': 38,
+    'tab': 39
+}
 class PlayerInput:
     def __init__(self, shared_data):
         """
@@ -42,6 +58,7 @@ class PlayerInput:
             9: {"main_switch": 1, "fan_speed": 1990, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
         }
         
+        
         # 注册导航回调
         self.state_manager.register_navigation_callback(self._on_navigation_changed)
         
@@ -69,22 +86,7 @@ class PlayerInput:
         
         while self.running:
             time.sleep(0.1)
-    TOWER_KEY_MAP = {
-    # 26个字母: bit 0-25
-    'a': 0,  'b': 1,  'c': 2,  'd': 3,  'e': 4,
-    'f': 5,  'g': 6,  'h': 7,  'i': 8,  'j': 9,
-    'k': 10, 'l': 11, 'm': 12, 'n': 13, 'o': 14,
-    'p': 15, 'q': 16, 'r': 17, 's': 18, 't': 19,
-    'u': 20, 'v': 21, 'w': 22, 'x': 23, 'y': 24,
-    'z': 25,
-    # 10个数字: bit 26-35
-    '0': 26, '1': 27, '2': 28, '3': 29, '4': 30,
-    '5': 31, '6': 32, '7': 33, '8': 34, '9': 35,
-    # 4个修饰键: bit 36-39
-    'shift': 36,
-    'ctrl': 37,
-    'alt': 38,
-    'tab': 39,}
+    
     def _normalize_tower_key(self, key):
         """
         统一修饰键名称
@@ -115,10 +117,12 @@ class PlayerInput:
             if self.shared_data.main_state == MainState.TOWER:
                 # ESC: 清零所有bit位，并可选退出
                 if key == 'esc':
-                    self.tower_key_bits = bytearray(5)
-                    self.shared_data.tower_key_bits = self.tower_key_bits
-                    # 如果还需要保留原有ESC的导航退出逻辑，取消下面注释
-                    self.state_manager.handle_escape()
+                    is_all_zero = all(b == 0 for b in self.tower_key_bits)
+                    if is_all_zero:
+                        self.state_manager.handle_escape()
+                    else:
+                        self.tower_key_bits = bytearray(5)
+                        self.shared_data.tower_key_bits = self.tower_key_bits
                     return
 
                 # 空格: 总开关切换（保留原有逻辑）
@@ -146,8 +150,8 @@ class PlayerInput:
                     bit_index = TOWER_KEY_MAP[normalized_key]
                     byte_index = bit_index // 8
                     bit_offset = bit_index % 8
-                    # 置1（toggle也可以，这里按需求是按下变1）
-                    self.tower_key_bits[byte_index] |= (1 << bit_offset)
+                    # toggle
+                    self.tower_key_bits[byte_index] ^= (1 << bit_offset)
                     # 同步到共享数据供发送使用
                     self.shared_data.tower_key_bits = bytes(self.tower_key_bits)
 
@@ -206,73 +210,89 @@ class PlayerInput:
 
         except Exception as e:
             print(f"按键处理错误: {e}")
-
-
-    
-    def _on_key_press(self, event):
-        """按键事件处理"""
-        if not self.running:
-            return
+    def get_tower_bits_display(self):
+        """
+        辅助方法：获取TOWER模式下40位bit的可读显示
+        用于UI展示当前哪些键被按下
+        返回格式如: "a c 3 shift" 表示这些键被按下
+        """
+        pressed = []
+        for key_name, bit_index in TOWER_KEY_MAP.items():
+            byte_index = bit_index // 8
+            bit_offset = bit_index % 8
+            if self.tower_key_bits[byte_index] & (1 << bit_offset):
+                pressed.append(key_name.upper())
+        return pressed
+    def get_tower_bits_hex(self):
+        """
+        辅助方法：获取5字节的十六进制表示，便于调试和发送
+        """
+        return ' '.join(f'{b:02X}' for b in self.tower_key_bits)
+        
+    # def _on_key_press(self, event):
+    #     """按键事件处理"""
+    #     if not self.running:
+    #         return
             
-        try:
-            key = event.name
+    #     try:
+    #         key = event.name
             
-            # 导航控制
-            if key == 'up':
-                self.state_manager.navigate_up()
-            elif key == 'down':
-                self.state_manager.navigate_down()
-            elif key == 'left':
-                self.state_manager.navigate_left()
-            elif key == 'right':
-                self.state_manager.navigate_right()
-            elif key == 'enter':
-                self.state_manager.handle_enter()
-            elif key == 'esc':
-                self.state_manager.handle_escape()
+    #         # 导航控制
+    #         if key == 'up':
+    #             self.state_manager.navigate_up()
+    #         elif key == 'down':
+    #             self.state_manager.navigate_down()
+    #         elif key == 'left':
+    #             self.state_manager.navigate_left()
+    #         elif key == 'right':
+    #             self.state_manager.navigate_right()
+    #         elif key == 'enter':
+    #             self.state_manager.handle_enter()
+    #         elif key == 'esc':
+    #             self.state_manager.handle_escape()
             
-            # 总开关切换（仅在AUTO/TOWER模式下有效）
-            elif key == 'space':
-                self._toggle_main_switch()
+    #         # 总开关切换（仅在AUTO/TOWER模式下有效）
+    #         elif key == 'space':
+    #             self._toggle_main_switch()
             
-            # 'D'键：在STOP模式下直接切换到DATA模式
-            elif key == 'd' and self.shared_data.main_state == MainState.STOP:
-                self._switch_to_data()
+    #         # 'D'键：在STOP模式下直接切换到DATA模式
+    #         elif key == 'd' and self.shared_data.main_state == MainState.STOP:
+    #             self._switch_to_data()
             
-            # 'L'键：在DATA模式下切换黑箱记录状态
-            elif key == 'l' and self.shared_data.main_state == MainState.DATA:
-                self._toggle_blackbox_logging()
+    #         # 'L'键：在DATA模式下切换黑箱记录状态
+    #         elif key == 'l' and self.shared_data.main_state == MainState.DATA:
+    #             self._toggle_blackbox_logging()
             
-            # 数字输入
-            elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
-                number = int(key)
+    #         # 数字输入
+    #         elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+    #             number = int(key)
                 
-                # 根据当前状态和导航确认状态决定数字键功能
-                if self.shared_data.main_state in [MainState.AUTO, MainState.TOWER]:
-                    # 在AUTO/TOWER模式下，数字键用于预设状态
-                    if number in self.preset_states:
-                        self._set_preset_state(number)
-                elif self.shared_data.main_state == MainState.TUNING:
-                    # 在TUNING模式下，数字键用于参数输入
-                    if self.shared_data.nav_confirm:
-                        # 在确认状态下，数字键添加到缓冲区（用于输入多位数字）
-                        self._add_digit(str(number))
-                    else:
-                        # 在未确认状态下，数字键用于输入数字到缓冲区
-                        # 用户应该先选择参数，然后输入数字
-                        self._add_digit(str(number))
-                else:
-                    # 在其他模式下（如STOP），数字键用于参数输入
-                    self._add_digit(str(number))
-            elif key == '.':
-                self._add_decimal_point()
-            elif key == 'backspace':
-                self._delete_input_char()
+    #             # 根据当前状态和导航确认状态决定数字键功能
+    #             if self.shared_data.main_state in [MainState.AUTO, MainState.TOWER]:
+    #                 # 在AUTO/TOWER模式下，数字键用于预设状态
+    #                 if number in self.preset_states:
+    #                     self._set_preset_state(number)
+    #             elif self.shared_data.main_state == MainState.TUNING:
+    #                 # 在TUNING模式下，数字键用于参数输入
+    #                 if self.shared_data.nav_confirm:
+    #                     # 在确认状态下，数字键添加到缓冲区（用于输入多位数字）
+    #                     self._add_digit(str(number))
+    #                 else:
+    #                     # 在未确认状态下，数字键用于输入数字到缓冲区
+    #                     # 用户应该先选择参数，然后输入数字
+    #                     self._add_digit(str(number))
+    #             else:
+    #                 # 在其他模式下（如STOP），数字键用于参数输入
+    #                 self._add_digit(str(number))
+    #         elif key == '.':
+    #             self._add_decimal_point()
+    #         elif key == 'backspace':
+    #             self._delete_input_char()
             
             
             
-        except Exception as e:
-            print(f"按键处理错误: {e}")
+    #     except Exception as e:
+    #         print(f"按键处理错误: {e}")
     
     # ==================== 状态切换方法 ====================
     def _switch_to_stop_and_reset(self):

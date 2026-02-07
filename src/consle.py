@@ -252,7 +252,17 @@ class Consle:
             # 智能截断确保显示完整
             line = self._truncate_line_for_display(stdscr, row, line)
             stdscr.addstr(row, 0, line)
-        
+        elif self.shared_data.main_state == MainState.TOWER:
+            pressed_keys = self.player_input.get_tower_bits_display()
+            hex_data = self.player_input.get_tower_bits_hex()
+            if pressed_keys:
+                line = f"TOWER按键: {', '.join(pressed_keys)}"
+            else:
+                line = "TOWER按键: 无"
+    
+            line += f" 数据: {hex_data}"
+            line = self._truncate_line_for_display(stdscr, row, line)
+            stdscr.addstr(row, 0, line)
         # TUNING模式：保持原有显示逻辑
         elif self.shared_data.main_state == MainState.TUNING:
             sub_state = self.shared_data.sub_state
