@@ -159,7 +159,7 @@ class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码TOWER状态数据：0xAA + 0x02 + uint8[1] + int16[1] + float32[4] + 0xBB (22字节)"""
+        """编码TOWER状态数据：0xAA + 0x02  + int16[1]+ ++crc  + 0xBB (字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x02)  # TOWER状态标识

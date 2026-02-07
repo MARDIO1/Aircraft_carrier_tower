@@ -19,6 +19,10 @@ class PlayerInput:
         self.state_manager = StateMachineManager(shared_data)
         self.running = False
         self.input_thread = None
+
+        #专为tower而生的
+        self.tower_key_bits = bytearray(5)
+
         
         # 输入缓冲区
         self.input_buffer = ""
@@ -65,6 +69,145 @@ class PlayerInput:
         
         while self.running:
             time.sleep(0.1)
+    TOWER_KEY_MAP = {
+    # 26个字母: bit 0-25
+    'a': 0,  'b': 1,  'c': 2,  'd': 3,  'e': 4,
+    'f': 5,  'g': 6,  'h': 7,  'i': 8,  'j': 9,
+    'k': 10, 'l': 11, 'm': 12, 'n': 13, 'o': 14,
+    'p': 15, 'q': 16, 'r': 17, 's': 18, 't': 19,
+    'u': 20, 'v': 21, 'w': 22, 'x': 23, 'y': 24,
+    'z': 25,
+    # 10个数字: bit 26-35
+    '0': 26, '1': 27, '2': 28, '3': 29, '4': 30,
+    '5': 31, '6': 32, '7': 33, '8': 34, '9': 35,
+    # 4个修饰键: bit 36-39
+    'shift': 36,
+    'ctrl': 37,
+    'alt': 38,
+    'tab': 39,}
+    def _normalize_tower_key(self, key):
+        """
+        统一修饰键名称
+        keyboard库在不同平台可能返回 'left shift', 'right shift', 'left ctrl' 等
+        统一映射为 'shift', 'ctrl', 'alt', 'tab'
+        """
+        if 'shift' in key:
+            return 'shift'
+        if 'ctrl' in key or 'control' in key:
+            return 'ctrl'
+        if 'alt' in key:
+            return 'alt'
+        if key == 'tab':
+            return 'tab'
+        # 字母和数字直接返回（已经lower过了）
+        return key
+    def _on_key_press(self, event):
+        """按键事件处理"""
+        if not self.running:
+            return
+
+        try:
+            key = event.name.lower() if event.name else ''
+
+            # ============================================================
+            # TOWER模式：独立处理，40键映射到5字节bit位
+            # ============================================================
+            if self.shared_data.main_state == MainState.TOWER:
+                # ESC: 清零所有bit位，并可选退出
+                if key == 'esc':
+                    self.tower_key_bits = bytearray(5)
+                    self.shared_data.tower_key_bits = self.tower_key_bits
+                    # 如果还需要保留原有ESC的导航退出逻辑，取消下面注释
+                    self.state_manager.handle_escape()
+                    return
+
+                # 空格: 总开关切换（保留原有逻辑）
+                if key == 'space':
+                    self._toggle_main_switch()
+                    return
+
+                # 导航键保留（上下左右回车用于TOWER界面内导航）
+                if key in ('up', 'down', 'left', 'right', 'enter'):
+                    nav_funcs = {
+                        'up': self.state_manager.navigate_up,
+                        'down': self.state_manager.navigate_down,
+                        'left': self.state_manager.navigate_left,
+                        'right': self.state_manager.navigate_right,
+                        'enter': self.state_manager.handle_enter,
+                    }
+                    nav_funcs[key]()
+                    return
+
+                # 处理修饰键名称统一（keyboard库可能返回 'left shift' 等）
+                normalized_key = self._normalize_tower_key(key)
+
+                # 查找bit位映射
+                if normalized_key in TOWER_KEY_MAP:
+                    bit_index = TOWER_KEY_MAP[normalized_key]
+                    byte_index = bit_index // 8
+                    bit_offset = bit_index % 8
+                    # 置1（toggle也可以，这里按需求是按下变1）
+                    self.tower_key_bits[byte_index] |= (1 << bit_offset)
+                    # 同步到共享数据供发送使用
+                    self.shared_data.tower_key_bits = bytes(self.tower_key_bits)
+
+                return  # TOWER模式下其余按键不处理
+
+            # ============================================================
+            # 非TOWER模式：原有逻辑
+            # ============================================================
+
+            # 导航控制
+            if key == 'up':
+                self.state_manager.navigate_up()
+            elif key == 'down':
+                self.state_manager.navigate_down()
+            elif key == 'left':
+                self.state_manager.navigate_left()
+            elif key == 'right':
+                self.state_manager.navigate_right()
+            elif key == 'enter':
+                self.state_manager.handle_enter()
+            elif key == 'esc':
+                self.state_manager.handle_escape()
+
+            # 总开关切换（仅在AUTO模式下有效，TOWER已在上面单独处理）
+            elif key == 'space':
+                if self.shared_data.main_state == MainState.AUTO:
+                    self._toggle_main_switch()
+
+            # 'D'键：在STOP模式下直接切换到DATA模式
+            elif key == 'd' and self.shared_data.main_state == MainState.STOP:
+                self._switch_to_data()
+
+            # 'L'键：在DATA模式下切换黑箱记录状态
+            elif key == 'l' and self.shared_data.main_state == MainState.DATA:
+                self._toggle_blackbox_logging()
+
+            # 数字输入
+            elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
+                number = int(key)
+
+                if self.shared_data.main_state == MainState.AUTO:
+                    # AUTO模式下，数字键用于预设状态
+                    if number in self.preset_states:
+                        self._set_preset_state(number)
+                elif self.shared_data.main_state == MainState.TUNING:
+                    # TUNING模式下，数字键用于参数输入
+                    self._add_digit(str(number))
+                else:
+                    # 其他模式（如STOP），数字键用于参数输入
+                    self._add_digit(str(number))
+
+            elif key == '.':
+                self._add_decimal_point()
+            elif key == 'backspace':
+                self._delete_input_char()
+
+        except Exception as e:
+            print(f"按键处理错误: {e}")
+
+
     
     def _on_key_press(self, event):
         """按键事件处理"""
