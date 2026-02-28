@@ -1,4 +1,4 @@
-"""
+""                                                                                                                                                                                                                                                                                    """
 串口发送模块
 负责将键盘信号通过USB串口TTL发送
 """
@@ -20,6 +20,7 @@ class UARTSender:
         self.running = False
         self.send_thread = None
         self.last_sent_data = None
+        self.last_sent_hex = "-- 无数据 --"
         
     def start_sending(self):
         """开始发送数据"""
@@ -57,6 +58,7 @@ class UARTSender:
                     # 无论数据是否变化都发送，保持50Hz恒定频率
                     self.serial_port.write(packet)
                     self.last_sent_data = current_data
+                    self.last_sent_hex = ' '.join(f'{b:02X}' for b in packet)
                     #print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
                         
                 # 控制发送频率
@@ -73,13 +75,6 @@ class UARTSender:
         else:
             return "无发送记录"
             
-    def get_hex_data(self):
-        """获取当前数据的16进制格式"""
-        try:
-            # 编码数据包
-            packet = encode_data(self.shared_data)
-            # 转换为16进制字符串
-            hex_string = ' '.join([f"{byte:02X}" for byte in packet])
-            return hex_string
-        except Exception as e:
-            return f"编码错误: {e}"
+    def get_hex_data(self) -> str:
+        """返回最后一次实际发出的数据包（16进制字符串）"""
+        return self.last_sent_hex
