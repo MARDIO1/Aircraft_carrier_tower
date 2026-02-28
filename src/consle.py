@@ -1,496 +1,363 @@
-'''
-curses 控制台第一版
-五行
-'''
+"""
+终端 UI 模块 —— curses 五行固定布局
+修复：
+  - 逐行刷新（move+clrtoeol）替代全屏 clear，消除闪烁
+  - 统一安全 addstr 包装，防止末列溢出崩溃
+  - 手动 initscr 初始化，避免子线程内 wrapper 不稳定
+  - 移除所有 print() 调用，改用消息队列
+"""
+
 import threading
 import time
 import curses
 from datetime import datetime
 from protocol import MainState, SubState
 
-class Consle:
-    def __init__(self, uart_sender, initializer, player_input, shared_data=None):
-        """
-       初始化控制台
-        
-       
-        :param uart_sender: 串口发送对象
-        :param initializer: 初始化器对象
-        :param player_input: 键盘输入对象
-        :param shared_data: 共享数据对象（protocoldota)
-        """
-        self.uart_sender = uart_sender
-        self.initializer = initializer
-        self.player_input = player_input
-        self.shared_data = shared_data
-        self.running = False
-        self.console_thread = None
-        self.last_input_buffer = ""
 
-        #消息队列(存储最近两条)
-        self.message_queue = []
+# ──────────────────────────────────────────────
+#  工具函数
+# ──────────────────────────────────────────────
+
+def _display_width(text: str) -> int:
+    """估算字符串显示宽度（中文字符占 2 列）"""
+    w = 0
+    for ch in text:
+        code = ord(ch)
+        if (0x1100 <= code <= 0x115F or  # Hangul Jamo
+                0x2E80 <= code <= 0x303E or  # CJK Radicals / Kangxi
+                0x3040 <= code <= 0xA4CF or  # CJK区（含汉字基本区）
+                0xA960 <= code <= 0xA97F or
+                0xAC00 <= code <= 0xD7FF or
+                0xF900 <= code <= 0xFAFF or
+                0xFE10 <= code <= 0xFE1F or
+                0xFE30 <= code <= 0xFE4F or
+                0xFF01 <= code <= 0xFF60 or
+                0xFFE0 <= code <= 0xFFE6 or
+                0x1B000 <= code <= 0x1B77F or
+                0x1F300 <= code <= 0x1FAFF or
+                0x20000 <= code <= 0x2FFFD or
+                0x30000 <= code <= 0x3FFFD):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _fit_text(text: str, max_width: int) -> str:
+    """将文本裁剪到 max_width 列以内（中文安全截断）"""
+    if max_width <= 0:
+        return ""
+    w = 0
+    result = []
+    for ch in text:
+        cw = 2 if _display_width(ch) == 2 else 1
+        if w + cw > max_width:
+            break
+        result.append(ch)
+        w += cw
+    return "".join(result)
+
+
+# ──────────────────────────────────────────────
+#  Consle 类
+# ──────────────────────────────────────────────
+
+class Consle:
+    # 固定行号
+    _ROW_STATUS  = 0   # 模式/开关/风扇/舵机
+    _ROW_SEND    = 1   # 发送帧
+    _ROW_RECEIVE = 2   # 接收帧
+    _ROW_TUNING  = 3   # 调参/TOWER/导航
+    _ROW_MSG     = 4   # 消息队列
+
+    def __init__(self, uart_sender, initializer, player_input, shared_data=None):
+        self.uart_sender  = uart_sender
+        self.initializer  = initializer
+        self.player_input = player_input
+        self.shared_data  = shared_data
+
+        self.running        = False
+        self.console_thread = None
+        self._stdscr        = None          # curses 窗口句柄（子线程内初始化）
+
+        # 消息队列（最多保留 2 条）
+        self._msg_lock    = threading.Lock()
+        self.message_queue: list[str] = []
         self.max_messages = 2
 
-        #检测变化
-        self.last_mode = None
-        self.last_switch = None
-        self.last_fan = None
-        self.last_servo = None 
+        # 变化检测（避免频繁重写消息队列）
+        self._last_mode   = None
+        self._last_switch = None
+
+        # 输入缓冲（供 _draw_tuning_line 显示）
+        self._last_input_buf = ""
+
+    # ──────────── 公共接口 ────────────
 
     def start_display(self):
-        """开始显示控制台"""
+        """启动 UI 线程"""
         if self.running:
-            return 
+            return
         self.running = True
-        self.console_thread = threading.Thread(target=self._console_loop)
-        self.console_thread.daemon = True
+        self.console_thread = threading.Thread(
+            target=self._console_loop, daemon=True)
         self.console_thread.start()
-        #print("简洁控制台已启动")
-    
+
     def stop_display(self):
-        """停止显示控制台"""
+        """停止 UI 线程"""
         self.running = False
         if self.console_thread:
-            self.console_thread.join(timeout=1.0)
-        #print("控制台已停止")
-    
-    def add_message(self,message):
-        """添加消息到队列"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        full_message = f"{timestamp} {message}"
+            self.console_thread.join(timeout=1.5)
+        # 还原终端
+        if self._stdscr:
+            try:
+                curses.nocbreak()
+                self._stdscr.keypad(False)
+                curses.echo()
+                curses.endwin()
+            except Exception:
+                pass
+            self._stdscr = None
 
-        self.message_queue.append(full_message)
-        if len(self.message_queue) > self.max_messages:
-            self.message_queue.pop(0)
+    def add_message(self, message: str):
+        """线程安全地向消息队列添加一条带时间戳的消息"""
+        ts   = datetime.now().strftime("%H:%M:%S")
+        full = f"{ts} {message}"
+        with self._msg_lock:
+            self.message_queue.append(full)
+            while len(self.message_queue) > self.max_messages:
+                self.message_queue.pop(0)
+
+    # ──────────── 内部：线程主循环 ────────────
 
     def _console_loop(self):
-
-        """控制台主循环 - 使用curses.wrapper"""
-        print("控制台线程启动")
+        """UI 线程：手动初始化 curses，20 Hz 刷新"""
         try:
-            curses.wrapper(self._curses_main)
+            stdscr = curses.initscr()
+            self._stdscr = stdscr
+            curses.noecho()
+            curses.cbreak()
+            stdscr.keypad(True)
+            curses.curs_set(0)
+            stdscr.nodelay(True)   # 非阻塞，不让 curses 自己读键
+
+            self.add_message("控制台启动")
+
+            while self.running:
+                self._draw_console(stdscr)
+                time.sleep(0.05)    # 20 Hz
+
         except Exception as e:
-            print(f"控制台错误：{e}")
-        #print("控制台线程结束")
+            # curses 异常时恢复终端，不能用 print（可能 curses 还活着）
+            try:
+                curses.endwin()
+            except Exception:
+                pass
+            # 此时终端已还原，可以安全 print
+            print(f"[Consle] UI 线程异常退出: {e}")
+        finally:
+            try:
+                curses.endwin()
+            except Exception:
+                pass
 
-    def _curses_main(self, stdscr):
-        """curses主函数"""
-        curses.noecho()
-        curses.cbreak()
-        stdscr.keypad(True)
-        curses.curs_set(0)
-    
-        self.add_message("控制台启动")
-    
-        while self.running:
-            self._draw_console(stdscr)
-            time.sleep(0.02)
-    
-        # 清理
-        curses.nocbreak()
-        stdscr.keypad(False)
-        curses.echo()
-        curses.curs_set(1)
+    # ──────────── 内部：安全绘制 ────────────
 
+    def _safe_addstr(self, stdscr, row: int, text: str):
+        """
+        安全地在指定行写入文本：
+          1. move + clrtoeol 清除旧内容
+          2. 裁剪到终端宽度-1，防止末列溢出
+          3. 吞掉所有 curses 异常
+        """
+        try:
+            max_y, max_x = stdscr.getmaxyx()
+            if row >= max_y:
+                return
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+            fitted = _fit_text(text, max_x - 1)
+            if fitted:
+                stdscr.addstr(row, 0, fitted)
+        except curses.error:
+            pass
 
-    def _draw_console(self,stdscr):
-        """绘制控制台界面"""
-        curses.curs_set(0)
-        stdscr.clear()
-        height, width = stdscr.getmaxyx()
+    # ──────────── 内部：整屏绘制 ────────────
 
-        self._draw_status_line(stdscr,0)
+    def _draw_console(self, stdscr):
+        """每帧调用：逐行刷新，不清屏"""
+        self._draw_status_line(stdscr,  self._ROW_STATUS)
+        self._draw_send_line(stdscr,    self._ROW_SEND)
+        self._draw_receive_line(stdscr, self._ROW_RECEIVE)
+        self._draw_tuning_line(stdscr,  self._ROW_TUNING)
+        self._draw_message_line(stdscr, self._ROW_MSG)
+        try:
+            stdscr.refresh()
+        except curses.error:
+            pass
 
-        self._draw_send_line(stdscr,1)
+    # ──────────── 行 0：状态总览 ────────────
 
-        self._draw_receive_line(stdscr,2)
-
-        self._draw_tuning_line(stdscr,3)
-
-        self._draw_message_line(stdscr,4)
-
-        stdscr.refresh()
-
-    def _draw_status_line(self,stdscr,row):
-        """第一行：显示主状态和导航信息"""
+    def _draw_status_line(self, stdscr, row: int):
         if not self.shared_data:
-            stdscr.addstr(row,0,"模式：--- 开关：--- 风扇：--- 舵机：---")
+            self._safe_addstr(stdscr, row, "模式:--- 开关:--- 风扇:--- 舵机:---")
             return
-        
-        # 获取主状态
-        main_state = self.shared_data.main_state
-        # 使用MainState枚举值
-        if main_state == MainState.STOP:
-            mode_text = "模式:STOP"
-        elif main_state == MainState.AUTO:
-            mode_text = "模式:AUTO"
-        elif main_state == MainState.TOWER:
-            mode_text = "模式:TOWER"
-        elif main_state == MainState.TUNING:
-            mode_text = "模式:TUNING"
-        elif main_state == MainState.DATA:
-            mode_text = "模式:DATA"
-        else:
-            mode_text = f"模式:{main_state.name}"
-        
-        # 获取子状态（如果处于TUNING模式）
-        if main_state == MainState.TUNING:
-            sub_state = self.shared_data.sub_state
-            if sub_state == SubState.SERVO:
-                mode_text += "(SERVO)"
-            elif sub_state == SubState.PID:
-                mode_text += "(PID)"
-            elif sub_state == SubState.JACOBIAN:
-                mode_text += "(JACOBIAN)"
-        
-        switch = self.shared_data.main_switch
-        switch_text = "开关:ON" if switch == 1 else "开关:OFF"
 
-        fan_text = f"风扇:{self.shared_data.fan_speed}"
+        sd = self.shared_data
+        ms = sd.main_state
 
-        servo_str = ','.join([f"{angle:.1f}" for angle in self.shared_data.servo_angles])
-        servo_text = f"舵机:[{servo_str}]"
+        mode_map = {
+            MainState.STOP:   "STOP",
+            MainState.AUTO:   "AUTO",
+            MainState.TOWER:  "TOWER",
+            MainState.TUNING: "TUNING",
+            MainState.DATA:   "DATA",
+        }
+        mode_text = f"模式:{mode_map.get(ms, ms.name)}"
 
-        # 添加导航信息
-        nav_row = self.shared_data.nav_row
-        nav_col = self.shared_data.nav_col
-        nav_text = f"导航:[{nav_row},{nav_col}]"
-        
-        line = f"{mode_text} {switch_text} {fan_text} {servo_text} {nav_text}"
-         
-        self._check_status_changes(main_state.value, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
+        if ms == MainState.TUNING:
+            sub_map = {SubState.SERVO: "SERVO", SubState.PID: "PID", SubState.JACOBIAN: "JACOBIAN"}
+            mode_text += f"({sub_map.get(sd.sub_state, '?')})"
 
-        stdscr.addstr(row, 0, line)
-    def _check_status_changes(self, main_state, switch, fan, servo):
-        """检测状态并记录"""
-        current_servo_str = ','.join([f"{angle:.1f}" for angle in servo])
+        switch_text = f"开关:{'ON' if sd.main_switch == 1 else 'OFF'}"
+        fan_text    = f"风扇:{sd.fan_speed}"
+        servo_str   = ",".join(f"{a:.1f}" for a in sd.servo_angles)
+        nav_text    = f"导航:[{sd.nav_row},{sd.nav_col}]"
 
-        if(main_state != self.last_mode or
-           switch != self.last_switch or
-           fan != self.last_fan or
-           current_servo_str != self.last_servo):
-            if main_state != self.last_mode and self.last_mode is not None:
-                if main_state == MainState.STOP.value:
-                    self.add_message("停止模式")
-                elif main_state == MainState.AUTO.value:
-                    self.add_message("自动模式")
-                elif main_state == MainState.TOWER.value:
-                    self.add_message("塔楼模式")
-                elif main_state == MainState.TUNING.value:
-                    self.add_message("调参模式")
-                elif main_state == MainState.DATA.value:
-                    self.add_message("数据模式")
-                    
-            if switch != self.last_switch and self.last_switch is not None:
-                self.add_message(f"开关:{'ON' if switch == 1 else 'OFF'}")
+        line = f"{mode_text} {switch_text} {fan_text} 舵机:[{servo_str}] {nav_text}"
+        self._safe_addstr(stdscr, row, line)
 
-            #更新上次状态
-            self.last_mode = main_state
-            self.last_switch = switch
-            self.last_fan = fan
-            self.last_servo = current_servo_str
-    
-    def _draw_send_line(self,stdscr,row):
-        """绘制第二行"""
+        # 状态变化时追加一条消息（避免在 curses 内 print）
+        self._check_status_changes(ms, sd.main_switch)
+
+    def _check_status_changes(self, ms: MainState, switch: int):
+        mode_val = ms.value
+        if mode_val != self._last_mode and self._last_mode is not None:
+            names = {
+                MainState.STOP.value:   "停止模式",
+                MainState.AUTO.value:   "自动模式",
+                MainState.TOWER.value:  "塔楼模式",
+                MainState.TUNING.value: "调参模式",
+                MainState.DATA.value:   "数据模式",
+            }
+            self.add_message(names.get(mode_val, f"模式:{ms.name}"))
+        if switch != self._last_switch and self._last_switch is not None:
+            self.add_message(f"开关:{'ON' if switch == 1 else 'OFF'}")
+        self._last_mode   = mode_val
+        self._last_switch = switch
+
+    # ──────────── 行 1：发送帧 ────────────
+
+    def _draw_send_line(self, stdscr, row: int):
         if not self.uart_sender:
-            stdscr.addstr(row, 0, "发送:---")
+            self._safe_addstr(stdscr, row, "发送:---")
             return
         try:
             hex_data = self.uart_sender.get_hex_data()
-            stdscr.addstr(row, 0, f"发送:{hex_data}")
+            self._safe_addstr(stdscr, row, f"发送:{hex_data}")
         except Exception as e:
-            stdscr.addstr(row, 0, f"发送:错误{str(e)[:20]}")
+            self._safe_addstr(stdscr, row, f"发送:错误 {str(e)[:30]}")
 
-    def _draw_receive_line(self, stdscr, row):
-        """第三行：根据模式显示不同的接收数据"""
+    # ──────────── 行 2：接收帧 ────────────
+
+    def _draw_receive_line(self, stdscr, row: int):
         if not self.shared_data:
-            stdscr.addstr(row, 0, "接收:未连接")
+            self._safe_addstr(stdscr, row, "接收:未连接")
             return
-        
-        # DATA模式：显示BlackBox数据第一行（角度和角速度）
-        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
-            angle = self.shared_data.blackbox_angle
-            gyro = self.shared_data.blackbox_gyro
-            timestamp = self.shared_data.blackbox_timestamp
-            statemachine = self.shared_data.blackbox_statemachine
-            line = f"时间戳:{timestamp} 状态机:0x{statemachine:02X}({statemachine}) "
-            line += f"角度(r,p,y)=({angle[0]:.3f},{angle[1]:.3f},{angle[2]:.3f}) "
-            line += f"角速度(x,y,z)=({gyro[0]:.3f},{gyro[1]:.3f},{gyro[2]:.3f})"
-            stdscr.addstr(row, 0, line)
-        
-        # 其他模式：保持原有显示逻辑
+
+        sd = self.shared_data
+
+        if sd.main_state == MainState.DATA and sd.blackbox_received:
+            ang = sd.blackbox_angle
+            gyr = sd.blackbox_gyro
+            line = (f"时间戳:{sd.blackbox_timestamp} "
+                    f"状态机:0x{sd.blackbox_statemachine:02X} "
+                    f"角(r,p,y)=({ang[0]:.2f},{ang[1]:.2f},{ang[2]:.2f}) "
+                    f"角速(x,y,z)=({gyr[0]:.2f},{gyr[1]:.2f},{gyr[2]:.2f})")
         else:
-            switch = self.shared_data.received_switch
-            roll = self.shared_data.received_angle_roll
-            pitch = self.shared_data.received_angle_pitch
-            yaw = self.shared_data.received_angle_yaw
-
-            has_data = (switch != 0 or 
-                       abs(roll) > 0.001 or 
-                       abs(pitch) > 0.001 or 
-                       abs(yaw) > 0.001)    
-
-            if has_data:
-                line = f"接收:开关={switch} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f})"
-                stdscr.addstr(row, 0, line)
+            sw    = sd.received_switch
+            roll  = sd.received_angle_roll
+            pitch = sd.received_angle_pitch
+            yaw   = sd.received_angle_yaw
+            if sw != 0 or abs(roll) > 0.001 or abs(pitch) > 0.001 or abs(yaw) > 0.001:
+                line = f"接收:开关={sw} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f})"
             else:
-                stdscr.addstr(row, 0, "接收:无数据")
-    
-    def _draw_tuning_line(self,stdscr,row):
-        """第四行：根据模式显示不同的信息"""
+                line = "接收:无数据"
+
+        self._safe_addstr(stdscr, row, line)
+
+    # ──────────── 行 3：调参 / TOWER / 导航 ────────────
+
+    def _draw_tuning_line(self, stdscr, row: int):
         if not self.shared_data:
             return
-        
-        # DATA模式：显示BlackBox数据第二行（加速度、舵机）
-        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
-            acc = self.shared_data.blackbox_acc
-            rudder = self.shared_data.blackbox_rudder
-            
-            line = f"加速度(x,y,z)=({acc[0]:.3f},{acc[1]:.3f},{acc[2]:.3f}) "
-            line += f"舵机=[{rudder[0]:.3f},{rudder[1]:.3f},{rudder[2]:.3f},{rudder[3]:.3f}]"
-            
-            # 智能截断确保显示完整
-            line = self._truncate_line_for_display(stdscr, row, line)
-            stdscr.addstr(row, 0, line)
-        elif self.shared_data.main_state == MainState.TOWER:
-            pressed_keys = self.player_input.get_tower_bits_display()
+
+        sd  = self.shared_data
+        ms  = sd.main_state
+        inp = getattr(self.player_input, "input_buffer", "")
+
+        # DATA 模式第二行
+        if ms == MainState.DATA and sd.blackbox_received:
+            acc    = sd.blackbox_acc
+            rudder = sd.blackbox_rudder
+            line   = (f"加速度=({acc[0]:.2f},{acc[1]:.2f},{acc[2]:.2f}) "
+                      f"舵机=[{rudder[0]:.2f},{rudder[1]:.2f},{rudder[2]:.2f},{rudder[3]:.2f}]")
+            self._safe_addstr(stdscr, row, line)
+            return
+
+        # TOWER 模式
+        if ms == MainState.TOWER:
+            pressed = self.player_input.get_tower_bits_display()
             hex_data = self.player_input.get_tower_bits_hex()
-            if pressed_keys:
-                line = f"TOWER按键: {', '.join(pressed_keys)}"
-            else:
-                line = "TOWER按键: 无"
-    
-            line += f" 数据: {hex_data}"
-            line = self._truncate_line_for_display(stdscr, row, line)
-            stdscr.addstr(row, 0, line)
-        # TUNING模式：保持原有显示逻辑
-        elif self.shared_data.main_state == MainState.TUNING:
-            sub_state = self.shared_data.sub_state
-            nav_row = self.shared_data.nav_row
-            nav_col = self.shared_data.nav_col
-            
-            if sub_state == SubState.SERVO:  # SERVO
-                # 显示舵机调参信息
-                # 修复：使用nav_col而不是nav_row来索引舵机
-                if 0 <= nav_col < len(self.shared_data.servo_angles):
-                    servo_idx = nav_col
-                    servo_value = self.shared_data.servo_angles[servo_idx]
-                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
-                    
-                    line = f"舵机[{servo_idx}]:{servo_value:.1f}"
-                    if input_buffer:
-                        line += f" [输入:{input_buffer}]"
-                    
-                    # 智能截断，确保显示完整
-                    line = self._truncate_line_for_display(stdscr, row, line)
-                    stdscr.addstr(row,0,line)
-                    
-                    if input_buffer != self.last_input_buffer:
-                        self.add_message(f"舵机{servo_idx}输入:{input_buffer}")
-                        self.last_input_buffer = input_buffer
-                else:
-                    # 如果nav_col超出范围，显示默认信息
-                    line = f"舵机选择:使用左右键选择舵机(0-3)"
-                    line = self._truncate_line_for_display(stdscr, row, line)
-                    stdscr.addstr(row,0,line)
-                        
-            elif sub_state == SubState.PID:  # PID
-                # 显示PID调参信息
-                pid_idx = nav_row
-                param_idx = nav_col
-                
-                if (pid_idx < len(self.shared_data.pid_name) and 
-                    param_idx < len(self.shared_data.param_names)):
-                    
-                    pid_name = self.shared_data.pid_name[pid_idx]
-                    param_name = self.shared_data.param_names[param_idx]
-                    param_value = self.shared_data.pid_param[pid_idx][param_idx]
-                    
-                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
-                    
-                    # 优化显示格式：移除"PID:"前缀，直接显示参数
-                    line = f"{pid_name}.{param_name}={param_value:.3f}"
-                    if input_buffer:
-                        line += f" [输入:{input_buffer}]"
-                    
-                    # 智能截断，确保显示完整
-                    line = self._truncate_line_for_display(stdscr, row, line)
-                    stdscr.addstr(row,0,line)
-                    
-                    if input_buffer != self.last_input_buffer:
-                        self.add_message(f"PID{pid_name}.{param_name}输入:{input_buffer}")
-                        self.last_input_buffer = input_buffer
-                        
-            elif sub_state == SubState.JACOBIAN:  # JACOBIAN
-                # 显示Jacobian调参信息
-                row_idx = nav_row
-                col_idx = nav_col
-                
-                if (row_idx < 3 and col_idx < 4):
-                    jacobian_value = self.shared_data.jacobian_matrix[row_idx][col_idx]
-                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
-                    
-                    line = f"J[{row_idx},{col_idx}]:{jacobian_value:.3f}"
-                    if input_buffer:
-                        line += f" [输入:{input_buffer}]"
-                    
-                    # 智能截断，确保显示完整
-                    line = self._truncate_line_for_display(stdscr, row, line)
-                    stdscr.addstr(row,0,line)
-                    
-                    if input_buffer != self.last_input_buffer:
-                        self.add_message(f"J[{row_idx},{col_idx}]输入:{input_buffer}")
-                        self.last_input_buffer = input_buffer
-            else:
-                # 显示导航信息
-                line = f"导航:行={nav_row},列={nav_col}"
-                line = self._truncate_line_for_display(stdscr, row, line)
-                stdscr.addstr(row,0,line)
-        
-        # 其他模式：保持原有显示逻辑
-        else:
-            # 非TUNING模式显示导航提示
-            nav_row = self.shared_data.nav_row
-            nav_col = self.shared_data.nav_col
-            line = f"导航:行={nav_row},列={nav_col} (上下左右导航,Enter确认)"
-            line = self._truncate_line_for_display(stdscr, row, line)
-            stdscr.addstr(row,0,line)
-
-    def _truncate_line_for_display(self, stdscr, row, line):
-        """智能截断字符串，确保中文字符不被错误截断"""
-        try:
-            # 获取终端宽度
-            max_width = stdscr.getmaxyx()[1] - 1  # 留一个字符的余量
-            
-            # 如果字符串长度小于等于最大宽度，直接返回
-            if len(line) <= max_width:
-                return line
-            
-            # 计算中文字符数量（中文字符通常占2个显示宽度）
-            # 简单估算：中文字符显示宽度为2，英文字符显示宽度为1
-            display_width = 0
-            for char in line:
-                if self._is_chinese_char(char):
-                    display_width += 2
-                else:
-                    display_width += 1
-            
-            # 如果显示宽度小于等于最大宽度，直接返回
-            if display_width <= max_width:
-                return line
-            
-            # 需要截断：从末尾开始移除字符，直到显示宽度合适
-            truncated = line
-            while display_width > max_width and truncated:
-                # 移除最后一个字符
-                last_char = truncated[-1]
-                truncated = truncated[:-1]
-                
-                # 更新显示宽度
-                if self._is_chinese_char(last_char):
-                    display_width -= 2
-                else:
-                    display_width -= 1
-            
-            # 添加省略号表示截断
-            if truncated != line:
-                # 确保省略号不会导致再次超出宽度
-                ellipsis = "..."
-                ellipsis_width = len(ellipsis)  # 英文省略号，每个字符宽度为1
-                
-                # 如果添加省略号后仍然超出，继续截断
-                while display_width + ellipsis_width > max_width and truncated:
-                    last_char = truncated[-1]
-                    truncated = truncated[:-1]
-                    
-                    if self._is_chinese_char(last_char):
-                        display_width -= 2
-                    else:
-                        display_width -= 1
-                
-                truncated += ellipsis
-            
-            return truncated
-        except Exception as e:
-            # 如果出现任何错误，返回原始字符串（截断到安全长度）
-            safe_length = min(len(line), 80)  # 安全长度
-            return line[:safe_length]
-    
-    def _is_chinese_char(self, char):
-        """检查字符是否是中文字符"""
-        try:
-            code = ord(char)
-            # 中文字符的Unicode范围（包括基本汉字、扩展A区、扩展B区等）
-            return (0x4E00 <= code <= 0x9FFF or  # CJK统一表意文字
-                    0x3400 <= code <= 0x4DBF or  # CJK统一表意文字扩展A区
-                    0x20000 <= code <= 0x2A6DF or  # CJK统一表意文字扩展B区
-                    0x2A700 <= code <= 0x2B73F or  # CJK统一表意文字扩展C区
-                    0x2B740 <= code <= 0x2B81F or  # CJK统一表意文字扩展D区
-                    0x2B820 <= code <= 0x2CEAF or  # CJK统一表意文字扩展E区
-                    0x2CEB0 <= code <= 0x2EBEF or  # CJK统一表意文字扩展F区
-                    0x30000 <= code <= 0x3134F or  # CJK统一表意文字扩展G区
-                    0xF900 <= code <= 0xFAFF or  # CJK兼容表意文字
-                    0x2F800 <= code <= 0x2FA1F)  # CJK兼容表意文字补充
-        except:
-            return False
-    
-    def _draw_message_line(self, stdscr, row):
-        """第五行"""
-        if not self.message_queue:
-            stdscr.addstr(row, 0, "")
+            keys_str = ", ".join(pressed) if pressed else "无"
+            self._safe_addstr(stdscr, row, f"TOWER按键:{keys_str}  数据:{hex_data}")
             return
-        
-        messages = self.message_queue[-2:]
-        line = " ".join(messages)
 
-        max_len = stdscr.getmaxyx()[1] - 1
-        if len(line) > max_len:
-            line = line[:max_len]
+        # TUNING 模式
+        if ms == MainState.TUNING:
+            ss      = sd.sub_state
+            nav_row = sd.nav_row
+            nav_col = sd.nav_col
 
-        stdscr.addstr(row, 0, line)
-    def get_display_info(self):
-        """获取显示信息（兼容原有接口）"""
-        if not self.uart_sender or not self.initializer or not self.player_input:
-            return {
-                "last_sent": "---",
-                "com_port": "---",
-                "current_state": "---",
-                "received_data": "---"
-            }
-            
-        # 获取发送信息
-        try:
-            last_sent = self.uart_sender.get_last_sent_info()
-        except:
-            last_sent = "---"
-            
-        # 获取配置信息
-        try:
-            config = self.initializer.get_current_config()
-            com_port = config["com_port"] if config["com_port"] else "未连接"
-        except:
-            com_port = "---"
-            
-        # 获取输入状态
-        try:
-            input_state = self.player_input.get_current_input()
-            current_state = f"开关={input_state['main_switch']} 风扇={input_state['fan_speed']} 舵机={input_state['servo_angles']}"
-        except:
-            current_state = "---"
-            
-        # 获取接收数据
-        if self.shared_data:
-            switch = self.shared_data.received_switch
-            roll = self.shared_data.received_angle_roll
-            pitch = self.shared_data.received_angle_pitch
-            yaw = self.shared_data.received_angle_yaw
-            received_info = f"开关={switch} 角度=({roll:.2f},{pitch:.2f},{yaw:.2f})"
-        else:
-            received_info = "未连接"
-            
-        return {
-            "last_sent": last_sent,
-            "com_port": com_port,
-            "current_state": current_state,
-            "received_data": received_info
-        }
+            if ss == SubState.SERVO:
+                idx = nav_col if 0 <= nav_col < len(sd.servo_angles) else 0
+                val = sd.servo_angles[idx]
+                line = f"舵机[{idx}]:{val:.1f}"
+                if inp:
+                    line += f"  [输入:{inp}]"
+                self._safe_addstr(stdscr, row, line)
+
+                # 输入变化时通知（只通知一次）
+                if inp != self._last_input_buf:
+                    self._last_input_buf = inp
+
+            elif ss == SubState.PID:
+                if nav_row < len(sd.pid_name) and nav_col < len(sd.param_names):
+                    pname = sd.pid_name[nav_row]
+                    param = sd.param_names[nav_col]
+                    val   = sd.pid_param[nav_row][nav_col]
+                    line  = f"{pname}.{param}={val:.3f}"
+                    if inp:
+                        line += f"  [输入:{inp}]"
+                    self._safe_addstr(stdscr, row, line)
+
+            elif ss == SubState.JACOBIAN:
+                if nav_row < 3 and nav_col < 4:
+                    val  = sd.jacobian_matrix[nav_row][nav_col]
+                    line = f"J[{nav_row},{nav_col}]:{val:.3f}"
+                    if inp:
+                        line += f"  [输入:{inp}]"
+                    self._safe_addstr(stdscr, row, line)
+            return
+
+        # 其他模式：导航提示
+        line = f"导航:行={sd.nav_row},列={sd.nav_col}  (方向键导航, Enter确认)"
+        self._safe_addstr(stdscr, row, line)
+
+    # ──────────── 行 4：消息 ────────────
+
+    def _draw_message_line(self, stdscr, row: int):
+        with self._msg_lock:
+            msgs = list(self.message_queue[-2:])
+        line = "  ".join(msgs) if msgs else ""
+        self._safe_addstr(stdscr, row, line)
