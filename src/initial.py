@@ -11,7 +11,7 @@ class Initializer:
     def __init__(self):
         self.serial_port = None
         self.com_port = None
-        self.baud_rate = 500000
+        self.baud_rate = 115200
         self.protocol_data = ProtocolData()
         
     def list_available_ports(self):
@@ -40,8 +40,14 @@ class Initializer:
             print(f"  {i+1}. {port['device']} - {port['description']}")
         
         return available_ports
-    
-    def initialize_serial(self,com_port="COM10"):
+    def find_port_by_description(self,description_keyboard):
+        """根据描述信息找端口"""
+        available_ports = self.list_available_ports()
+        for port in available_ports :
+            if description_keyboard in port['description']:
+                return port['device'] 
+        return None
+    def initialize_serial(self,com_port=None,auto_keyword="CH340"):
         """
         初始化串口连接
         Args:
@@ -65,7 +71,8 @@ class Initializer:
             self.com_port = com_port
         else:
             # 自动选择第一个可用端口
-            self.com_port = port_devices[0]
+            self.com_port = self.find_port_by_description(auto_keyword)
+            
             print(f"自动选择COM口: {self.com_port}")
         
         try:
