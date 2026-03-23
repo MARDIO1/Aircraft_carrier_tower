@@ -267,7 +267,7 @@ class Consle:
                     servo_value = self.shared_data.servo_angles[servo_idx]
                     input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
                     
-                    line = f"舵机[{servo_idx}]:{servo_value:.1f}"
+                    line = f"舵机[{servo_idx}]:{servo_value:.3f}"
                     if input_buffer:
                         line += f" [输入:{input_buffer}]"
                     

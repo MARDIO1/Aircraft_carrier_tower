@@ -6,7 +6,9 @@
 import keyboard
 import threading
 import time
-from protocol import ProtocolData, MainState, SubState, StateMachineManager
+import json
+from pathlib import Path
+from protocol import ProtocolData, MainState, SubState, StateMachineManager, PID_TYPE_ENCODING
 
 class PlayerInput:
     def __init__(self, shared_data):
@@ -24,6 +26,11 @@ class PlayerInput:
         self.input_buffer = ""
         self.input_decimal = False
         self.last_input_buffer = ""
+
+        # 仅用于舵机调参模式的参数记忆（跨重启）
+        self.servo_persist_file = Path(__file__).resolve().parent.parent / "servo_params.json"
+        self.last_tuned_servo_angles = [0.0, 0.0, 0.0, 0.0]
+        self._load_last_tuned_servo_angles()
         
         # 预设状态
         self.preset_states = {
@@ -84,7 +91,36 @@ class PlayerInput:
             elif key == 'right':
                 self.state_manager.navigate_right()
             elif key == 'enter':
+                # 若存在输入缓冲，优先提交参数，避免误触发状态切换
+                if self._commit_input_buffer_if_ready():
+                    return
+
+                # 检测是否“进入舵机调参确认态”，进入时恢复上次调好的舵机参数
+                prev_main_state = self.shared_data.main_state
+                prev_sub_state = self.shared_data.sub_state
+                prev_confirm = self.shared_data.nav_confirm
                 self.state_manager.handle_enter()
+
+                # 进入TUNING时先恢复一次舵机记忆参数，避免界面继续显示四个0
+                entered_tuning = (
+                    prev_main_state != MainState.TUNING
+                    and self.shared_data.main_state == MainState.TUNING
+                )
+                if entered_tuning:
+                    self._apply_last_tuned_servo_angles()
+
+                entered_servo_confirm = (
+                    self.shared_data.main_state == MainState.TUNING
+                    and self.shared_data.sub_state == SubState.SERVO
+                    and self.shared_data.nav_confirm
+                    and not (
+                        prev_main_state == MainState.TUNING
+                        and prev_sub_state == SubState.SERVO
+                        and prev_confirm
+                    )
+                )
+                if entered_servo_confirm:
+                    self._apply_last_tuned_servo_angles()
             elif key == 'esc':
                 self.state_manager.handle_escape()
             
@@ -229,7 +265,6 @@ class PlayerInput:
     def _add_digit(self, digit: str):
         """添加数字到缓冲区"""
         self.input_buffer += digit
-        self._update_param_from_buffer()
         self.last_input_buffer = self.input_buffer
     
     def _add_decimal_point(self):
@@ -240,7 +275,6 @@ class PlayerInput:
             else:
                 self.input_buffer += "."
             self.input_decimal = True
-            self._update_param_from_buffer()
             self.last_input_buffer = self.input_buffer
     
     def _delete_input_char(self):
@@ -249,7 +283,6 @@ class PlayerInput:
             if self.input_buffer[-1] == '.':
                 self.input_decimal = False
             self.input_buffer = self.input_buffer[:-1]
-            self._update_param_from_buffer()
             self.last_input_buffer = self.input_buffer
     
     def _clear_input_buffer(self):
@@ -257,6 +290,38 @@ class PlayerInput:
         self.input_buffer = ""
         self.input_decimal = False
         self.last_input_buffer = ""
+
+    def _load_last_tuned_servo_angles(self):
+        """加载上次舵机调参结果（仅作为舵机模式初始值）"""
+        try:
+            if not self.servo_persist_file.exists():
+                return
+
+            data = json.loads(self.servo_persist_file.read_text(encoding='utf-8'))
+            servo_angles = data.get("servo_angles")
+            if isinstance(servo_angles, list) and len(servo_angles) == 4:
+                self.last_tuned_servo_angles = [float(v) for v in servo_angles]
+                print(f"已加载舵机记忆参数: {self.last_tuned_servo_angles}")
+        except Exception as e:
+            print(f"加载舵机记忆参数失败: {e}")
+
+    def _save_last_tuned_servo_angles(self):
+        """保存舵机调参结果（仅SERVO模式提交时触发）"""
+        try:
+            payload = {
+                "servo_angles": [float(v) for v in self.last_tuned_servo_angles],
+                "saved_at": time.time()
+            }
+            self.servo_persist_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            print(f"保存舵机记忆参数失败: {e}")
+
+    def _apply_last_tuned_servo_angles(self):
+        """将记忆值应用到当前舵机参数（进入SERVO调参时调用）"""
+        self.shared_data.servo_angles = self.last_tuned_servo_angles.copy()
     
     def _on_navigation_changed(self, nav_row: int, nav_col: int):
         """
@@ -265,15 +330,29 @@ class PlayerInput:
         """
         self._clear_input_buffer()
         print(f"导航位置改变: 行={nav_row}, 列={nav_col}, 已清空输入缓冲区")
-    
-    def _update_param_from_buffer(self):
-        """从缓冲区更新参数值"""
+
+    def _commit_input_buffer_if_ready(self) -> bool:
+        """若输入缓冲可提交则写入参数并返回True，否则返回False"""
         if not self.input_buffer:
-            return
+            return False
+
+        # 末尾小数点视为未完成输入，不提交
+        if self.input_buffer.endswith('.'):
+            return False
+
+        if self._update_param_from_buffer():
+            self._clear_input_buffer()
+            return True
+        return False
+    
+    def _update_param_from_buffer(self) -> bool:
+        """从缓冲区更新参数值。成功返回True，失败返回False"""
+        if not self.input_buffer:
+            return False
         
         try:
             if self.input_buffer.endswith('.'):
-                return
+                return False
             
             value = float(self.input_buffer)
             
@@ -284,29 +363,39 @@ class PlayerInput:
                     if 0 <= self.shared_data.selected_pid < len(self.shared_data.pid_param):
                         if 0 <= self.shared_data.nav_col < len(self.shared_data.pid_param[0]):
                             self.shared_data.pid_param[self.shared_data.selected_pid][self.shared_data.nav_col] = value
+                            return True
                 elif self.shared_data.sub_state == SubState.JACOBIAN:
                     # 更新Jacobian矩阵
                     row = self.shared_data.nav_row
                     col = self.shared_data.nav_col
                     if 0 <= row < 3 and 0 <= col < 4:
                         self.shared_data.jacobian_matrix[row][col] = value
+                        return True
                 elif self.shared_data.sub_state == SubState.SERVO:
                     # 更新舵机角度
                     servo_index = self.shared_data.nav_col
                     if 0 <= servo_index < 4:
                         self.shared_data.servo_angles[servo_index] = value
+                        self.last_tuned_servo_angles = self.shared_data.servo_angles.copy()
+                        self._save_last_tuned_servo_angles()
+                        return True
             else:
                 # 在AUTO或TOWER模式下更新参数
                 if self.shared_data.nav_col == 0:  # 开关
                     self.shared_data.main_switch = int(value)
+                    return True
                 elif self.shared_data.nav_col == 1:  # 风扇
                     self.shared_data.fan_speed = int(value)
+                    return True
                 elif 2 <= self.shared_data.nav_col <= 5:  # 舵机
                     servo_index = self.shared_data.nav_col - 2
                     self.shared_data.servo_angles[servo_index] = value
+                    return True
         
         except ValueError:
-            pass
+            return False
+
+        return False
     
     # ==================== PID参数选择方法 ====================
     
