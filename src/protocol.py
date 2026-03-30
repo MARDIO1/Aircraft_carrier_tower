@@ -11,15 +11,20 @@ from typing import Optional, List, Tuple, Dict, Any
 from crc_calculator import add_crc8_to_packet
 from crc_calculator import extract_payload_with_crc, verify_crc8
 # PID类型编码映射
+# 说明：
+#  - 前 6 组必须与飞控端 which_PID 一一对应
+#    0xA1/0xA2/0xA3 → 力矩环 R/P/Y
+#    0xB1/0xB2/0xB3 → 姿态环 R/P/Y
+#  - 第 7 组作为本地扩展使用，当前不下传（编码 0x00）
 PID_TYPE_ENCODING = {
     -1: 0x00,  # 不改状态
-    0: 0xA1,   # 内环主翼舵机
-    1: 0xA2,   # 内环尾翼舵机
-    2: 0xB1,   # 中环roll
-    3: 0xB2,   # 中环pitch
-    4: 0xB3,   # 中环yaw
-    5: 0xC1,   # 外环方向(yaw)
-    6: 0xC2,   # 外环高度
+    0: 0xA1,   # 力矩环-roll
+    1: 0xA2,   # 力矩环-pitch
+    2: 0xA3,   # 力矩环-yaw
+    3: 0xB1,   # 姿态环-roll
+    4: 0xB2,   # 姿态环-pitch
+    5: 0xB3,   # 姿态环-yaw
+    6: 0x00,   # 预留/本地扩展，不下传
 }
 
 
@@ -354,15 +359,15 @@ class ProtocolData:
             [9.0, 0.0, 0.0, 0.0, 35.0, -35.0],  # 外环高度
         ]
         
-        # PID名称映射
+        # PID名称映射（与飞控端 which_PID 语义一一对应）
         self.pid_name = [
-            "内环主翼",      # 0
-            "内环尾翼",      # 1
-            "姿态环-roll",   # 2
-            "姿态环-pitch",  # 3
-            "姿态环-yaw",    # 4
-            "外环-yaw",      # 5
-            "外环-高度",     # 6
+            "力矩环-roll",    # 0 → which_PID 0xA1
+            "力矩环-pitch",   # 1 → which_PID 0xA2
+            "力矩环-yaw",     # 2 → which_PID 0xA3
+            "姿态环-roll",    # 3 → which_PID 0xB1
+            "姿态环-pitch",   # 4 → which_PID 0xB2
+            "姿态环-yaw",     # 5 → which_PID 0xB3
+            "扩展PID-本地",   # 6 → 本地扩展，不下传
         ]
         
         # 参数名称映射
@@ -539,20 +544,20 @@ class StateMachineManager:
                     SubState.SERVO: {'rows': 1, 'cols': 4, 'labels': ['舵机1', '舵机2', '舵机3', '舵机4']},
                     SubState.FEEDFORWARD: {'rows': 1, 'cols': 4, 'labels': ['前馈1', '前馈2', '前馈3', '前馈4']},
                     SubState.PID: {'rows': 7, 'cols': 6, 'labels': [
-                        # 第0行：内环主翼
-                        ['内环主翼-kp', '内环主翼-ki', '内环主翼-kd', '内环主翼-积分限幅', '内环主翼-正输出限幅', '内环主翼-负输出限幅'],
-                        # 第1行：内环尾翼
-                        ['内环尾翼-kp', '内环尾翼-ki', '内环尾翼-kd', '内环尾翼-积分限幅', '内环尾翼-正输出限幅', '内环尾翼-负输出限幅'],
-                        # 第2行：姿态环-roll
+                        # 第0行：力矩环-roll
+                        ['力矩环-roll-kp', '力矩环-roll-ki', '力矩环-roll-kd', '力矩环-roll-积分限幅', '力矩环-roll-正输出限幅', '力矩环-roll-负输出限幅'],
+                        # 第1行：力矩环-pitch
+                        ['力矩环-pitch-kp', '力矩环-pitch-ki', '力矩环-pitch-kd', '力矩环-pitch-积分限幅', '力矩环-pitch-正输出限幅', '力矩环-pitch-负输出限幅'],
+                        # 第2行：力矩环-yaw
+                        ['力矩环-yaw-kp', '力矩环-yaw-ki', '力矩环-yaw-kd', '力矩环-yaw-积分限幅', '力矩环-yaw-正输出限幅', '力矩环-yaw-负输出限幅'],
+                        # 第3行：姿态环-roll
                         ['姿态环-roll-kp', '姿态环-roll-ki', '姿态环-roll-kd', '姿态环-roll-积分限幅', '姿态环-roll-正输出限幅', '姿态环-roll-负输出限幅'],
-                        # 第3行：姿态环-pitch
+                        # 第4行：姿态环-pitch
                         ['姿态环-pitch-kp', '姿态环-pitch-ki', '姿态环-pitch-kd', '姿态环-pitch-积分限幅', '姿态环-pitch-正输出限幅', '姿态环-pitch-负输出限幅'],
-                        # 第4行：姿态环-yaw
+                        # 第5行：姿态环-yaw
                         ['姿态环-yaw-kp', '姿态环-yaw-ki', '姿态环-yaw-kd', '姿态环-yaw-积分限幅', '姿态环-yaw-正输出限幅', '姿态环-yaw-负输出限幅'],
-                        # 第5行：外环-yaw
-                        ['外环-yaw-kp', '外环-yaw-ki', '外环-yaw-kd', '外环-yaw-积分限幅', '外环-yaw-正输出限幅', '外环-yaw-负输出限幅'],
-                        # 第6行：外环-高度
-                        ['外环-高度-kp', '外环-高度-ki', '外环-高度-kd', '外环-高度-积分限幅', '外环-高度-正输出限幅', '外环-高度-负输出限幅']
+                        # 第6行：扩展PID-本地
+                        ['扩展PID-本地-kp', '扩展PID-本地-ki', '扩展PID-本地-kd', '扩展PID-本地-积分限幅', '扩展PID-本地-正输出限幅', '扩展PID-本地-负输出限幅']
                     ]},
                     SubState.JACOBIAN: {'rows': 3, 'cols': 4, 'labels': ['J[0,0]', 'J[0,1]', 'J[0,2]', 'J[0,3]', 
                                                                         'J[1,0]', 'J[1,1]', 'J[1,2]', 'J[1,3]',
