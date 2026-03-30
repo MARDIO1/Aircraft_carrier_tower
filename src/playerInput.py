@@ -157,6 +157,9 @@ class PlayerInput:
                 else:
                     # 在其他模式下（如STOP），数字键用于参数输入
                     self._add_digit(str(number))
+            elif key in ['-', 'minus']:
+                # 仅在舵机调参模式下允许输入负号
+                self._handle_minus_sign()
             elif key == '.':
                 self._add_decimal_point()
             elif key == 'backspace':
@@ -265,6 +268,22 @@ class PlayerInput:
     def _add_digit(self, digit: str):
         """添加数字到缓冲区"""
         self.input_buffer += digit
+        self.last_input_buffer = self.input_buffer
+
+    def _handle_minus_sign(self):
+        """处理负号输入（仅在舵机调参模式下生效）"""
+        if not (
+            self.shared_data.main_state == MainState.TUNING
+            and self.shared_data.sub_state == SubState.SERVO
+        ):
+            return
+
+        # 切换缓冲区开头的负号
+        if self.input_buffer.startswith('-'):
+            self.input_buffer = self.input_buffer[1:]
+        else:
+            self.input_buffer = '-' + self.input_buffer if self.input_buffer else '-'
+
         self.last_input_buffer = self.input_buffer
     
     def _add_decimal_point(self):
