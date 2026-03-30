@@ -20,6 +20,7 @@ class UARTSender:
         self.running = False
         self.send_thread = None
         self.last_sent_data = None
+        self._last_packet = None  # 最近一次成功编码的数据包
         
     def start_sending(self):
         """开始发送数据"""
@@ -44,26 +45,43 @@ class UARTSender:
         while self.running:
             try:
                 if self.serial_port and self.serial_port.is_open:
-                    # 编码数据包
-                    packet = encode_data(self.shared_data)
-                    
-                    # 获取当前数据状态
-                    current_data = {
-                        "main_switch": self.shared_data.main_switch,
-                        "fan_speed": self.shared_data.fan_speed,
-                        "servo_angles": self.shared_data.servo_angles.copy()
-                    }
-                    
-                    # 无论数据是否变化都发送，保持50Hz恒定频率
-                    self.serial_port.write(packet)
-                    self.last_sent_data = current_data
-                    #print(f"发送数据: 开关={current_data['main_switch']}, 风扇={current_data['fan_speed']}, 舵机={current_data['servo_angles']}")
+                    # 尝试编码当前控制数据
+                    try:
+                        packet = encode_data(self.shared_data)
+                    except Exception as enc_err:
+                        # 编码阶段出现异常时，优先复用上一帧数据，避免打断发送线程
+                        print(f"编码控制数据出错，使用上一帧数据继续发送: {enc_err}")
+                        packet = None
+
+                    # 如果本帧编码失败或返回None，则尝试发送上一帧数据
+                    if packet is None:
+                        packet_to_send = self._last_packet
+                        # 若还没有上一帧可用，则跳过本次发送
+                        if packet_to_send is None:
+                            time.sleep(0.02)
+                            continue
+                        # 不更新last_sent_data，表示这帧是重复发送
+                    else:
+                        packet_to_send = packet
+                        # 获取当前数据状态快照
+                        current_data = {
+                            "main_switch": self.shared_data.main_switch,
+                            "fan_speed": self.shared_data.fan_speed,
+                            "servo_angles": self.shared_data.servo_angles.copy()
+                        }
+                        self.last_sent_data = current_data
+                        self._last_packet = packet_to_send
+
+                    # 无论数据是否变化，都按50Hz发送
+                    self.serial_port.write(packet_to_send)
                         
                 # 控制发送频率
                 time.sleep(0.02)  # 50Hz发送间隔 (20ms)
                 
             except Exception as e:
-                print(f"串口发送错误: {e}")
+                # 串口底层错误属于硬件/连接问题，此时结束发送线程
+                print(f"串口发送错误，发送线程已停止: {e}")
+                self.running = False
                 break
                 
     def get_last_sent_info(self):

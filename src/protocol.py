@@ -200,11 +200,19 @@ class PIDEncoder(EncoderBase):
     """PID调参编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码PID调参数据：0xAA + 0xA2 + pid_type_encoding + float[6] + 0xBB"""
-        if data.selected_pid < 0 or data.selected_pid >= len(data.pid_param):
-            print(f"错误：PID索引{data.selected_pid}超出范围(0-{len(data.pid_param)-1})")
-            return None
-        
+        """编码PID调参数据：0xAA + 0xA2 + pid_type_encoding + float[6] + 0xBB
+
+        约束：
+        - 不再返回None，索引非法时自动夹紧到合法范围，并打印告警
+        - 保证始终生成一帧可发送的数据包，避免影响上层发送线程稳定性
+        """
+        pid_count = len(data.pid_param)
+
+        # 规范化 selected_pid，防止越界
+        if data.selected_pid < 0 or data.selected_pid >= pid_count:
+            print(f"警告：PID索引{data.selected_pid}超出范围(0-{pid_count-1})，已自动夹紧")
+            data.selected_pid = max(0, min(data.selected_pid, pid_count - 1))
+
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0xA2)  # PID调参状态标识
@@ -220,16 +228,22 @@ class PIDEncoder(EncoderBase):
             pid_encoding = PID_TYPE_ENCODING.get(data.pid_tuning_state, 0x00)
             packet.append(pid_encoding)
         else:
-            # 无效状态，默认发送0x00
+            # 无效状态，默认发送0x00并给出提示
+            print(f"警告：pid_tuning_state={data.pid_tuning_state} 非法，已按'不改'处理")
             packet.append(0x00)
         
         # 发送当前pid_tuning_state对应的PID组参数
         # 如果pid_tuning_state=-1，发送selected_pid的参数
         pid_to_send = data.selected_pid if data.pid_tuning_state == -1 else data.pid_tuning_state
-        
-        if 0 <= pid_to_send < len(data.pid_param):
-            for param_value in data.pid_param[pid_to_send]:
-                packet.extend(struct.pack('<f', float(param_value)))
+        # 兜底：若pid_to_send非法，回退到PID[0]
+        if 0 <= pid_to_send < pid_count:
+            target_index = pid_to_send
+        else:
+            print(f"警告：pid_to_send={pid_to_send} 非法，使用PID[0]作为回退")
+            target_index = 0
+
+        for param_value in data.pid_param[target_index]:
+            packet.extend(struct.pack('<f', float(param_value)))
         
         packet.append(0xBB)  # END_BYTE
         packet_with_crc =add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
