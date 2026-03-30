@@ -38,6 +38,7 @@ class SubState(Enum):
     SERVO = 0xA1     # 舵机调参
     PID = 0xA2       # PID调参
     JACOBIAN = 0xA3  # 雅可比矩阵调参
+    FEEDFORWARD = 0xA4  # 前馈调参（与SERVO相同数据结构）
 
 # ==================== 状态转换验证 ====================
 
@@ -196,6 +197,30 @@ class ServoEncoder(EncoderBase):
     def get_packet_length(self) -> int:
         return 20
 
+class FeedforwardEncoder(EncoderBase):
+    """FEEDFORWARD前馈调参编码器
+
+    帧格式与SERVO调参完全一致，仅第二字节模式标识不同：0xA4
+    数据负载同样为4个舵面值(float32)，使用ProtocolData.feedforward_values。
+    """
+
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码FEEDFORWARD调参数据：0xAA + 0xA4 + float[4] + 0xBB"""
+        packet = bytearray()
+
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0xA4)  # FEEDFORWARD子状态
+
+        for angle in data.feedforward_values:
+            packet.extend(struct.pack('<f', float(angle)))
+
+        packet.append(0xBB)  # END_BYTE
+        packet_with_crc = add_crc8_to_packet(packet, calc_start=0, calc_end=-1)
+        return packet_with_crc
+
+    def get_packet_length(self) -> int:
+        return 20
+
 class PIDEncoder(EncoderBase):
     """PID调参编码器"""
     
@@ -286,6 +311,7 @@ class EncoderFactory:
         MainState.TOWER: TowerEncoder(),
         MainState.DATA: DataEncoder(),  # 新增DATA模式编码器
         SubState.SERVO: ServoEncoder(),
+        SubState.FEEDFORWARD: FeedforwardEncoder(),
         SubState.PID: PIDEncoder(),
         SubState.JACOBIAN: JacobianEncoder(),
     }
@@ -309,6 +335,8 @@ class ProtocolData:
         self.main_switch = 0  # 总开关: 0=STOP, 1=AUTO, 2=TOWER
         self.fan_speed = 0    # 风扇转速
         self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度
+        # 前馈调参舵面值（与servo_angles独立）
+        self.feedforward_values = [0.0, 0.0, 0.0, 0.0]
         
         # 调参参数
         self.selected_pid = 0  # 当前选中的PID索引
@@ -502,13 +530,14 @@ class StateMachineManager:
                 'target_states': None
             },
             MainState.TUNING: {
-                'rows': 3,  # 行数：三个子模式
+                'rows': 4,  # 行数：四个子模式（舵机、前馈、PID、Jacobian）
                 'cols': 1,  # 列数：一维数组（选择子模式）
-                'labels': ['舵机调参', 'PID调参', 'Jacobian调参'],
-                'target_states': [SubState.SERVO, SubState.PID, SubState.JACOBIAN],
+                'labels': ['舵机调参', '前馈调参', 'PID调参', 'Jacobian调参'],
+                'target_states': [SubState.SERVO, SubState.FEEDFORWARD, SubState.PID, SubState.JACOBIAN],
                 # 子模式的具体导航配置
                 'sub_nav_config': {
                     SubState.SERVO: {'rows': 1, 'cols': 4, 'labels': ['舵机1', '舵机2', '舵机3', '舵机4']},
+                    SubState.FEEDFORWARD: {'rows': 1, 'cols': 4, 'labels': ['前馈1', '前馈2', '前馈3', '前馈4']},
                     SubState.PID: {'rows': 7, 'cols': 6, 'labels': [
                         # 第0行：内环主翼
                         ['内环主翼-kp', '内环主翼-ki', '内环主翼-kd', '内环主翼-积分限幅', '内环主翼-正输出限幅', '内环主翼-负输出限幅'],
@@ -676,11 +705,13 @@ class StateMachineManager:
                 if self.data.nav_row == 0:
                     self.data.set_sub_state(SubState.SERVO)
                 elif self.data.nav_row == 1:
+                    self.data.set_sub_state(SubState.FEEDFORWARD)
+                elif self.data.nav_row == 2:
                     self.data.set_sub_state(SubState.PID)
                     # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
                     self.data.pid_tuning_state = -1
                     print("进入PID调参模式，当前状态：不改 (0x00)")
-                elif self.data.nav_row == 2:
+                elif self.data.nav_row == 3:
                     self.data.set_sub_state(SubState.JACOBIAN)
                 
                 # 进入确认状态
@@ -829,14 +860,19 @@ class StateMachineManager:
                 if self.data.nav_row == 0:
                     return "舵机调参模式"
                 elif self.data.nav_row == 1:
-                    return "PID调参模式"
+                    return "前馈调参模式"
                 elif self.data.nav_row == 2:
+                    return "PID调参模式"
+                elif self.data.nav_row == 3:
                     return "Jacobian调参模式"
             else:
                 # 确认状态：显示具体参数
                 if self.data.sub_state == SubState.SERVO:
                     if 0 <= self.data.nav_col < 4:
                         return f"舵机{self.data.nav_col + 1}: {self.data.servo_angles[self.data.nav_col]:.2f}"
+                elif self.data.sub_state == SubState.FEEDFORWARD:
+                    if 0 <= self.data.nav_col < 4:
+                        return f"前馈{self.data.nav_col + 1}: {self.data.servo_angles[self.data.nav_col]:.2f}"
                 elif self.data.sub_state == SubState.PID:
                     if 0 <= self.data.nav_row < 7 and 0 <= self.data.nav_col < 6:
                         pid_index = self.data.nav_row

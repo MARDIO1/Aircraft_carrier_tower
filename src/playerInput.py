@@ -27,10 +27,26 @@ class PlayerInput:
         self.input_decimal = False
         self.last_input_buffer = ""
 
-        # 仅用于舵机调参模式的参数记忆（跨重启）
-        self.servo_persist_file = Path(__file__).resolve().parent.parent / "servo_params.json"
+        # 调参模式参数记忆（跨重启）
+        base_dir = Path(__file__).resolve().parent.parent
+        # 舵机调参
+        self.servo_persist_file = base_dir / "servo_params.json"
         self.last_tuned_servo_angles = [0.0, 0.0, 0.0, 0.0]
+        # 前馈调参
+        self.feedforward_persist_file = base_dir / "feedforward_params.json"
+        self.last_tuned_feedforward = [0.0, 0.0, 0.0, 0.0]
+        # PID 调参（7x6 矩阵）
+        self.pid_persist_file = base_dir / "pid_params.json"
+        self.last_tuned_pid_param = [row.copy() for row in self.shared_data.pid_param]
+        # Jacobian 调参（3x4 矩阵）
+        self.jacobian_persist_file = base_dir / "jacobian_params.json"
+        self.last_tuned_jacobian = [row.copy() for row in self.shared_data.jacobian_matrix]
+
+        # 加载上次调参结果（如有），仅覆盖各自模式下的初始值
         self._load_last_tuned_servo_angles()
+        self._load_last_tuned_feedforward()
+        self._load_last_tuned_pid_param()
+        self._load_last_tuned_jacobian()
         
         # 预设状态
         self.preset_states = {
@@ -121,6 +137,45 @@ class PlayerInput:
                 )
                 if entered_servo_confirm:
                     self._apply_last_tuned_servo_angles()
+                # 进入其他调参子模式的确认态时，同样恢复各自的记忆参数
+                entered_ff_confirm = (
+                    self.shared_data.main_state == MainState.TUNING
+                    and self.shared_data.sub_state == SubState.FEEDFORWARD
+                    and self.shared_data.nav_confirm
+                    and not (
+                        prev_main_state == MainState.TUNING
+                        and prev_sub_state == SubState.FEEDFORWARD
+                        and prev_confirm
+                    )
+                )
+                if entered_ff_confirm:
+                    self._apply_last_tuned_feedforward()
+
+                entered_pid_confirm = (
+                    self.shared_data.main_state == MainState.TUNING
+                    and self.shared_data.sub_state == SubState.PID
+                    and self.shared_data.nav_confirm
+                    and not (
+                        prev_main_state == MainState.TUNING
+                        and prev_sub_state == SubState.PID
+                        and prev_confirm
+                    )
+                )
+                if entered_pid_confirm:
+                    self._apply_last_tuned_pid_param()
+
+                entered_jacobian_confirm = (
+                    self.shared_data.main_state == MainState.TUNING
+                    and self.shared_data.sub_state == SubState.JACOBIAN
+                    and self.shared_data.nav_confirm
+                    and not (
+                        prev_main_state == MainState.TUNING
+                        and prev_sub_state == SubState.JACOBIAN
+                        and prev_confirm
+                    )
+                )
+                if entered_jacobian_confirm:
+                    self._apply_last_tuned_jacobian()
             elif key == 'esc':
                 self.state_manager.handle_escape()
             
@@ -271,10 +326,10 @@ class PlayerInput:
         self.last_input_buffer = self.input_buffer
 
     def _handle_minus_sign(self):
-        """处理负号输入（仅在舵机调参模式下生效）"""
+        """处理负号输入（在舵机/前馈调参模式下生效）"""
         if not (
             self.shared_data.main_state == MainState.TUNING
-            and self.shared_data.sub_state == SubState.SERVO
+            and self.shared_data.sub_state in (SubState.SERVO, SubState.FEEDFORWARD)
         ):
             return
 
@@ -341,6 +396,122 @@ class PlayerInput:
     def _apply_last_tuned_servo_angles(self):
         """将记忆值应用到当前舵机参数（进入SERVO调参时调用）"""
         self.shared_data.servo_angles = self.last_tuned_servo_angles.copy()
+
+    def _load_last_tuned_feedforward(self):
+        """加载上次前馈调参结果"""
+        try:
+            if not self.feedforward_persist_file.exists():
+                return
+
+            data = json.loads(self.feedforward_persist_file.read_text(encoding='utf-8'))
+            values = data.get("feedforward_values")
+            if isinstance(values, list) and len(values) == 4:
+                self.last_tuned_feedforward = [float(v) for v in values]
+                print(f"已加载前馈记忆参数: {self.last_tuned_feedforward}")
+        except Exception as e:
+            print(f"加载前馈记忆参数失败: {e}")
+
+    def _save_last_tuned_feedforward(self):
+        """保存前馈调参结果"""
+        try:
+            payload = {
+                "feedforward_values": [float(v) for v in self.last_tuned_feedforward],
+                "saved_at": time.time()
+            }
+            self.feedforward_persist_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            print(f"保存前馈记忆参数失败: {e}")
+
+    def _apply_last_tuned_feedforward(self):
+        """将记忆值应用到当前前馈参数（进入FEEDFORWARD调参时调用）"""
+        self.shared_data.feedforward_values = self.last_tuned_feedforward.copy()
+
+    def _load_last_tuned_pid_param(self):
+        """加载上次PID调参结果"""
+        try:
+            if not self.pid_persist_file.exists():
+                return
+
+            data = json.loads(self.pid_persist_file.read_text(encoding='utf-8'))
+            pid_param = data.get("pid_param")
+            if isinstance(pid_param, list) and len(pid_param) == len(self.shared_data.pid_param):
+                parsed = []
+                valid = True
+                for row in pid_param:
+                    if not (isinstance(row, list) and len(row) == len(self.shared_data.pid_param[0])):
+                        valid = False
+                        break
+                    parsed.append([float(v) for v in row])
+                if valid:
+                    self.last_tuned_pid_param = parsed
+                    print("已加载PID记忆参数")
+        except Exception as e:
+            print(f"加载PID记忆参数失败: {e}")
+
+    def _save_last_tuned_pid_param(self):
+        """保存PID调参结果"""
+        try:
+            payload = {
+                "pid_param": [[float(v) for v in row] for row in self.last_tuned_pid_param],
+                "saved_at": time.time()
+            }
+            self.pid_persist_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            print(f"保存PID记忆参数失败: {e}")
+
+    def _apply_last_tuned_pid_param(self):
+        """将记忆值应用到当前PID参数（进入PID调参时调用）"""
+        for i in range(len(self.shared_data.pid_param)):
+            for j in range(len(self.shared_data.pid_param[0])):
+                self.shared_data.pid_param[i][j] = float(self.last_tuned_pid_param[i][j])
+
+    def _load_last_tuned_jacobian(self):
+        """加载上次Jacobian调参结果"""
+        try:
+            if not self.jacobian_persist_file.exists():
+                return
+
+            data = json.loads(self.jacobian_persist_file.read_text(encoding='utf-8'))
+            matrix = data.get("jacobian_matrix")
+            if isinstance(matrix, list) and len(matrix) == len(self.shared_data.jacobian_matrix):
+                parsed = []
+                valid = True
+                for row in matrix:
+                    if not (isinstance(row, list) and len(row) == len(self.shared_data.jacobian_matrix[0])):
+                        valid = False
+                        break
+                    parsed.append([float(v) for v in row])
+                if valid:
+                    self.last_tuned_jacobian = parsed
+                    print("已加载Jacobian记忆参数")
+        except Exception as e:
+            print(f"加载Jacobian记忆参数失败: {e}")
+
+    def _save_last_tuned_jacobian(self):
+        """保存Jacobian调参结果"""
+        try:
+            payload = {
+                "jacobian_matrix": [[float(v) for v in row] for row in self.last_tuned_jacobian],
+                "saved_at": time.time()
+            }
+            self.jacobian_persist_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding='utf-8'
+            )
+        except Exception as e:
+            print(f"保存Jacobian记忆参数失败: {e}")
+
+    def _apply_last_tuned_jacobian(self):
+        """将记忆值应用到当前Jacobian参数（进入Jacobian调参时调用）"""
+        for i in range(len(self.shared_data.jacobian_matrix)):
+            for j in range(len(self.shared_data.jacobian_matrix[0])):
+                self.shared_data.jacobian_matrix[i][j] = float(self.last_tuned_jacobian[i][j])
     
     def _on_navigation_changed(self, nav_row: int, nav_col: int):
         """
@@ -382,6 +553,9 @@ class PlayerInput:
                     if 0 <= self.shared_data.selected_pid < len(self.shared_data.pid_param):
                         if 0 <= self.shared_data.nav_col < len(self.shared_data.pid_param[0]):
                             self.shared_data.pid_param[self.shared_data.selected_pid][self.shared_data.nav_col] = value
+                            # 记忆并保存整张PID表
+                            self.last_tuned_pid_param = [row.copy() for row in self.shared_data.pid_param]
+                            self._save_last_tuned_pid_param()
                             return True
                 elif self.shared_data.sub_state == SubState.JACOBIAN:
                     # 更新Jacobian矩阵
@@ -389,14 +563,25 @@ class PlayerInput:
                     col = self.shared_data.nav_col
                     if 0 <= row < 3 and 0 <= col < 4:
                         self.shared_data.jacobian_matrix[row][col] = value
+                        # 记忆并保存整张Jacobian
+                        self.last_tuned_jacobian = [r.copy() for r in self.shared_data.jacobian_matrix]
+                        self._save_last_tuned_jacobian()
                         return True
                 elif self.shared_data.sub_state == SubState.SERVO:
-                    # 更新舵机角度
+                    # 更新舵机四个舵面值
                     servo_index = self.shared_data.nav_col
                     if 0 <= servo_index < 4:
                         self.shared_data.servo_angles[servo_index] = value
                         self.last_tuned_servo_angles = self.shared_data.servo_angles.copy()
                         self._save_last_tuned_servo_angles()
+                        return True
+                elif self.shared_data.sub_state == SubState.FEEDFORWARD:
+                    # 更新前馈四个舵面值（独立存储）
+                    servo_index = self.shared_data.nav_col
+                    if 0 <= servo_index < 4:
+                        self.shared_data.feedforward_values[servo_index] = value
+                        self.last_tuned_feedforward = self.shared_data.feedforward_values.copy()
+                        self._save_last_tuned_feedforward()
                         return True
             else:
                 # 在AUTO或TOWER模式下更新参数

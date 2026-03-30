@@ -138,6 +138,8 @@ class Consle:
             sub_state = self.shared_data.sub_state
             if sub_state == SubState.SERVO:
                 mode_text += "(SERVO)"
+            elif sub_state == SubState.FEEDFORWARD:
+                mode_text += "(FEEDFORWARD)"
             elif sub_state == SubState.PID:
                 mode_text += "(PID)"
             elif sub_state == SubState.JACOBIAN:
@@ -283,6 +285,28 @@ class Consle:
                     line = f"舵机选择:使用左右键选择舵机(0-3)"
                     line = self._truncate_line_for_display(stdscr, row, line)
                     stdscr.addstr(row,0,line)
+
+            elif sub_state == SubState.FEEDFORWARD:  # FEEDFORWARD
+                # 显示前馈调参信息，使用独立的 feedforward_values
+                if 0 <= nav_col < len(self.shared_data.feedforward_values):
+                    ff_idx = nav_col
+                    ff_value = self.shared_data.feedforward_values[ff_idx]
+                    input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
+
+                    line = f"前馈[{ff_idx}]:{ff_value:.3f}"
+                    if input_buffer:
+                        line += f" [输入:{input_buffer}]"
+
+                    line = self._truncate_line_for_display(stdscr, row, line)
+                    stdscr.addstr(row, 0, line)
+
+                    if input_buffer != self.last_input_buffer:
+                        self.add_message(f"前馈{ff_idx}输入:{input_buffer}")
+                        self.last_input_buffer = input_buffer
+                else:
+                    line = f"前馈选择:使用左右键选择通道(0-3)"
+                    line = self._truncate_line_for_display(stdscr, row, line)
+                    stdscr.addstr(row, 0, line)
                         
             elif sub_state == SubState.PID:  # PID
                 # 显示PID调参信息
