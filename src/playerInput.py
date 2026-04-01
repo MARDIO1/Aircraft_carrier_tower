@@ -9,6 +9,7 @@ import time
 import json
 from pathlib import Path
 from protocol import ProtocolData, MainState, SubState, StateMachineManager, PID_TYPE_ENCODING
+from auto_tune import AutoTuner
 
 class PlayerInput:
     def __init__(self, shared_data):
@@ -21,6 +22,9 @@ class PlayerInput:
         self.state_manager = StateMachineManager(shared_data)
         self.running = False
         self.input_thread = None
+        self.auto_tuner = AutoTuner(self.shared_data)
+        self.auto_tune_thread = None
+        self.auto_tuning = False
         
         # 输入缓冲区
         self.input_buffer = ""
@@ -96,6 +100,11 @@ class PlayerInput:
             
         try:
             key = event.name
+
+            # 一键自动调参热键：F9
+            if key == 'f9':
+                self._start_auto_tune()
+                return
             
             # 导航控制
             if key == 'up':
@@ -224,6 +233,26 @@ class PlayerInput:
             
         except Exception as e:
             print(f"按键处理错误: {e}")
+
+    def _start_auto_tune(self):
+        """启动一键自动调参（舵机 + 前馈）。"""
+        if self.auto_tuning:
+            print("自动调参已在进行中，忽略重复触发")
+            return
+
+        self.auto_tuning = True
+
+        def worker():
+            try:
+                self.auto_tuner.apply_servo_and_feedforward_from_files()
+            except Exception as e:
+                print(f"自动调参执行失败: {e}")
+            finally:
+                self.auto_tuning = False
+
+        self.auto_tune_thread = threading.Thread(target=worker)
+        self.auto_tune_thread.daemon = True
+        self.auto_tune_thread.start()
     
     # ==================== 状态切换方法 ====================
     def _switch_to_stop_and_reset(self):

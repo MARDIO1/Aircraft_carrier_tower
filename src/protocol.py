@@ -266,7 +266,7 @@ class PIDEncoder(EncoderBase):
         # 如果pid_tuning_state=-1，发送selected_pid的参数
         pid_to_send = data.selected_pid if data.pid_tuning_state == -1 else data.pid_tuning_state
         # 兜底：若pid_to_send非法，回退到PID[0]
-        if 0 <= pid_to_send < pid_count:
+        if 0 <=   pid_to_send < pid_count:
             target_index = pid_to_send
         else:
             print(f"警告：pid_to_send={pid_to_send} 非法，使用PID[0]作为回退")
