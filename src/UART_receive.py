@@ -72,7 +72,12 @@ class UARTReceiver:
             
         # 将数据添加到缓冲区
         self.receive_buffer.extend(data)
-        
+
+        # 缓冲区防溢出保护：超过上限时保留最后 256 字节（≥3 个完整帧），丢弃最老的垃圾字节
+        MAX_BUFFER = 1024
+        if len(self.receive_buffer) > MAX_BUFFER:
+            self.receive_buffer = self.receive_buffer[-256:]
+
         # 尝试从缓冲区中提取完整的76字节数据包
         while len(self.receive_buffer) >= 76:
             # 查找帧头 0xCC

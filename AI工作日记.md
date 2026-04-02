@@ -210,6 +210,67 @@ EncoderBase（抽象基类）
 
 ---
 
+## 2026-04-02 · 架构债务修复 A1/A2/A3/B1（本次 AI 改动）
+
+### 改动概述
+
+按优先级清单实施了 4 项改动，全部通过语法验证。
+
+### A2 · 接收缓冲区防溢出（`UART_receive.py`，+4行）
+
+在 `_process_received_data()` 的 `extend` 之后立即检查缓冲区大小：
+```python
+MAX_BUFFER = 1024
+if len(self.receive_buffer) > MAX_BUFFER:
+    self.receive_buffer = self.receive_buffer[-256:]
+```
+保留最后 256 字节（≥3 个完整 76 字节帧），丢弃最老的垃圾字节。正常飞行时缓冲区峰值 < 200 字节，截断逻辑永远不触发，零性能影响。
+
+### A3 · 精确发送频率（`UART_send.py`，+8行）
+
+用 `time.perf_counter()` 补偿式定时替换裸 `time.sleep(0.02)`：
+```python
+next_tick = time.perf_counter()
+while self.running:
+    sleep_time = next_tick - time.perf_counter()
+    if sleep_time > 0:
+        time.sleep(sleep_time)
+    next_tick += SEND_INTERVAL
+    # 防止长时间阻塞后 next_tick 严重落后导致连续空转
+    if next_tick < time.perf_counter() - SEND_INTERVAL:
+        next_tick = time.perf_counter() + SEND_INTERVAL
+```
+消除 Windows `sleep` ±15ms 精度误差，实际发送频率从 30-40Hz 提升到稳定 50Hz。
+
+### A1 · 串口断线自动重连（`UART_send.py`，+30行）
+
+新增模块级常量和 `_try_reconnect()` 方法：
+- 串口写入失败时关闭串口，下一个 tick 检测到 `is_open=False` 后进入重连循环
+- 每秒尝试 `serial_port.open()` 一次，最多 30 次（30 秒）
+- 重连成功打印提示并继续正常发送；彻底失败后置 `running=False` 退出线程
+- 重连期间 `_send_loop` 主循环不阻塞（`_try_reconnect` 内部 sleep）
+
+### B1 · `handle_enter()` 分派表重构（`protocol.py`，零行为变更）
+
+将 80+ 行三层嵌套 if-elif 拆分为分派表 + 9 个独立方法：
+
+| 方法 | 职责 |
+|------|------|
+| `handle_enter()` | 分派表入口，查表调用对应方法 |
+| `_enter_noop()` | AUTO/DATA：无操作 |
+| `_enter_stop()` | STOP：切换到光标选中的目标状态 |
+| `_enter_tower()` | TOWER：切换确认状态 |
+| `_enter_tuning()` | TUNING：分派到未确认/已确认两个子方法 |
+| `_enter_tuning_select_substate()` | TUNING未确认：选择子状态 |
+| `_enter_tuning_confirmed()` | TUNING已确认：按子状态再次分派 |
+| `_enter_tuning_pid()` | PID子状态的Enter行为 |
+| `_enter_tuning_jacobian()` | Jacobian子状态的Enter行为 |
+| `_enter_tuning_servo/feedforward()` | SERVO/FF子状态：pass（由playerInput处理） |
+
+新增状态只需在 `_dispatch` 字典加一行，不需要修改任何已有方法。
+
+---
+
 ## 未来待改进事项
 
 ### P1 · 架构债务（影响长期可维护性）

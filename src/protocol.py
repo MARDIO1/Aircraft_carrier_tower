@@ -710,103 +710,127 @@ class StateMachineManager:
         self._trigger_navigation_event()
     
     def handle_enter(self) -> bool:
-        """处理Enter键，返回是否状态改变"""
-        if self.data.main_state == MainState.AUTO:
+        """
+        处理Enter键，返回是否状态改变。
+        用分派表将各主状态的逻辑分散到独立方法，新增状态只需添加一行映射。
+        """
+        _dispatch = {
+            MainState.STOP:   self._enter_stop,
+            MainState.AUTO:   self._enter_noop,
+            MainState.DATA:   self._enter_noop,
+            MainState.TOWER:  self._enter_tower,
+            MainState.TUNING: self._enter_tuning,
+        }
+        handler = _dispatch.get(self.data.main_state)
+        if handler is None:
             return False
-        if self.data.main_state == MainState.STOP:
-            # 在STOP状态下，Enter用于切换到选中的状态
-            config = self.nav_config[MainState.STOP]
-            if 0 <= self.data.nav_row < len(config['target_states']):
-                target_state = config['target_states'][self.data.nav_row]
-                if self.data.set_main_state(target_state):
-                    # 重置导航位置
-                    self.data.nav_row = 0
-                    self.data.nav_col = 0
-                    self.data.nav_confirm = False
-                    return True
-            return False
-        
-        elif self.data.main_state == MainState.TUNING:
-            # 在TUNING模式下，Enter用于选择子模式或确认参数
-            if not self.data.nav_confirm:
-                # 第一次按Enter：选择子模式并进入确认状态
-                if self.data.nav_row == 0:
-                    self.data.set_sub_state(SubState.SERVO)
-                elif self.data.nav_row == 1:
-                    self.data.set_sub_state(SubState.FEEDFORWARD)
-                elif self.data.nav_row == 2:
-                    self.data.set_sub_state(SubState.PID)
-                    # 进入PID调参模式时，设置pid_tuning_state为-1（"不改"状态）
-                    self.data.pid_tuning_state = -1
-                    print("进入PID调参模式，当前状态：不改 (0x00)")
-                elif self.data.nav_row == 3:
-                    self.data.set_sub_state(SubState.JACOBIAN)
-                
-                # 进入确认状态
-                self.data.nav_confirm = True
-                # 重置导航位置到子模式的起始位置
+        return handler()
+
+    # ── handle_enter 各状态处理方法 ─────────────────────────────────────
+
+    def _enter_noop(self) -> bool:
+        """AUTO / DATA 状态下 Enter 无操作"""
+        return False
+
+    def _enter_stop(self) -> bool:
+        """STOP 状态：Enter 切换到光标选中的目标状态"""
+        config = self.nav_config[MainState.STOP]
+        if 0 <= self.data.nav_row < len(config['target_states']):
+            target_state = config['target_states'][self.data.nav_row]
+            if self.data.set_main_state(target_state):
                 self.data.nav_row = 0
                 self.data.nav_col = 0
-                self._trigger_navigation_event()
-                return True
-            else:
-                # 在确认状态下，Enter用于确认参数选择或进入下一个参数
-                if self.data.sub_state == SubState.PID:
-                    # 在PID模式下，Enter用于更新pid_tuning_state（数据包第三字节）
-                    current_pid = self.data.nav_row  # 当前导航行对应的PID组
-                    
-                    if 0 <= current_pid <= 6:
-                        # 更新pid_tuning_state为当前PID组
-                        old_state = self.data.pid_tuning_state
-                        self.data.pid_tuning_state = current_pid
-                        self.data.selected_pid = current_pid
-                        
-                        old_encoding = PID_TYPE_ENCODING.get(old_state, 0x00)
-                        new_encoding = PID_TYPE_ENCODING.get(current_pid, 0x00)
-                        print(f"Enter键：数据包第三字节从 0x{old_encoding:02X} 切换到 0x{new_encoding:02X}")
-                        print(f"当前发送PID组：{self.data.pid_name[current_pid]}")
-                    
-                    # 不退出确认状态，让用户可以继续调整参数
-                    # 如果需要退出确认状态，可以按Esc键
-                    self._trigger_navigation_event()
-                elif self.data.sub_state == SubState.JACOBIAN:
-                    # 在Jacobian模式下，Enter用于确认当前单元格并移动到下一个
-                    if self.data.nav_col < 3:  # 还有更多列
-                        self.data.nav_col += 1
-                    elif self.data.nav_row < 2:  # 还有更多行
-                        self.data.nav_row += 1
-                        self.data.nav_col = 0
-                    else:
-                        # 所有单元格都确认完毕，退出确认状态
-                        self.data.nav_confirm = False
-                        self.data.nav_row = 0
-                        self.data.nav_col = 0
-                        self._trigger_navigation_event()
-                elif self.data.sub_state == SubState.SERVO:
-                    # 在舵机模式下，Enter键用于确认输入或清空输入缓冲区
-                    # 这里我们不退出确认状态，让用户可以继续输入
-                    # 如果需要退出确认状态，可以按Esc键
-                    pass  # 舵机模式下Enter键不执行任何操作，用户直接输入数字即可
-                else:
-                    # 其他子模式，Enter退出确认状态
-                    self.data.nav_confirm = False
-                    self.data.nav_row = 0
-                    self.data.nav_col = 0
-                    self._trigger_navigation_event()
-                return True
-        
-        else:
-            # 在AUTO或TOWER模式下，Enter用于确认导航位置
-            if not self.data.nav_confirm:
-                # 第一次按Enter：进入确认状态
-                self.data.nav_confirm = True
-                self._trigger_navigation_event()
-                return True
-            else:
-                # 在确认状态下，Enter用于确认参数并退出确认状态
                 self.data.nav_confirm = False
-                self._trigger_navigation_event()
-                return False
+                return True
+        return False
+
+    def _enter_tower(self) -> bool:
+        """TOWER 状态：Enter 切换确认状态"""
+        if not self.data.nav_confirm:
+            self.data.nav_confirm = True
+            self._trigger_navigation_event()
+            return True
+        else:
+            self.data.nav_confirm = False
+            self._trigger_navigation_event()
+            return False
+
+    def _enter_tuning(self) -> bool:
+        """TUNING 状态：未确认时选择子状态，已确认时在子状态内操作"""
+        if not self.data.nav_confirm:
+            return self._enter_tuning_select_substate()
+        else:
+            return self._enter_tuning_confirmed()
+
+    def _enter_tuning_select_substate(self) -> bool:
+        """TUNING 未确认态：按光标行选择子状态并进入确认态"""
+        _substate_map = {
+            0: SubState.SERVO,
+            1: SubState.FEEDFORWARD,
+            2: SubState.PID,
+            3: SubState.JACOBIAN,
+        }
+        target_sub = _substate_map.get(self.data.nav_row)
+        if target_sub is None:
+            return False
+
+        self.data.set_sub_state(target_sub)
+        if target_sub == SubState.PID:
+            self.data.pid_tuning_state = -1
+            print("进入PID调参模式，当前状态：不改 (0x00)")
+
+        self.data.nav_confirm = True
+        self.data.nav_row = 0
+        self.data.nav_col = 0
+        self._trigger_navigation_event()
+        return True
+
+    def _enter_tuning_confirmed(self) -> bool:
+        """TUNING 确认态：按子状态分派到各自的 Enter 行为"""
+        _sub_dispatch = {
+            SubState.PID:         self._enter_tuning_pid,
+            SubState.JACOBIAN:    self._enter_tuning_jacobian,
+            SubState.SERVO:       self._enter_tuning_servo,
+            SubState.FEEDFORWARD: self._enter_tuning_feedforward,
+        }
+        handler = _sub_dispatch.get(self.data.sub_state)
+        if handler:
+            handler()
+        return True
+
+    def _enter_tuning_pid(self) -> None:
+        """PID 子状态：Enter 将当前行对应的 PID 组设为发送目标"""
+        current_pid = self.data.nav_row
+        if 0 <= current_pid <= 6:
+            old_encoding = PID_TYPE_ENCODING.get(self.data.pid_tuning_state, 0x00)
+            new_encoding = PID_TYPE_ENCODING.get(current_pid, 0x00)
+            self.data.pid_tuning_state = current_pid
+            self.data.selected_pid = current_pid
+            print(f"Enter键：数据包第三字节从 0x{old_encoding:02X} 切换到 0x{new_encoding:02X}")
+            print(f"当前发送PID组：{self.data.pid_name[current_pid]}")
+        self._trigger_navigation_event()
+
+    def _enter_tuning_jacobian(self) -> None:
+        """Jacobian 子状态：Enter 逐格移动光标，末格退出确认态"""
+        if self.data.nav_col < 3:
+            self.data.nav_col += 1
+        elif self.data.nav_row < 2:
+            self.data.nav_row += 1
+            self.data.nav_col = 0
+        else:
+            # 所有单元格确认完毕，退出确认态
+            self.data.nav_confirm = False
+            self.data.nav_row = 0
+            self.data.nav_col = 0
+        self._trigger_navigation_event()
+
+    def _enter_tuning_servo(self) -> None:
+        """SERVO 子状态：Enter 不移动光标，由 playerInput 的缓冲区提交处理"""
+        pass
+
+    def _enter_tuning_feedforward(self) -> None:
+        """FEEDFORWARD 子状态：与 SERVO 相同，Enter 不移动光标"""
+        pass
        
     def handle_number_input(self, number: int) -> None:
         """处理数字输入"""

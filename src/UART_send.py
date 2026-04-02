@@ -5,7 +5,12 @@
 
 import threading
 import time
+import serial
 from protocol import encode_data
+
+# 串口断线重连配置
+_RECONNECT_INTERVAL = 1.0   # 每次重连尝试间隔（秒）
+_RECONNECT_MAX_TRIES = 30   # 最多重试次数（30次 × 1秒 = 30秒后放弃）
 
 class UARTSender:
     def __init__(self, serial_port, shared_data):
@@ -41,51 +46,94 @@ class UARTSender:
         print("串口数据发送已停止")
         
     def _send_loop(self):
-        """数据发送循环"""
+        """
+        数据发送循环（50Hz，补偿式定时 + 断线自动重连）
+
+        A3 精确频率：用 perf_counter 补偿式定时，消除 Windows sleep 精度误差。
+        A1 断线重连：串口异常后不退出线程，每秒尝试重新打开，最多 _RECONNECT_MAX_TRIES 次。
+        """
+        SEND_INTERVAL = 0.02  # 50Hz = 20ms
+
+        next_tick = time.perf_counter()
+
         while self.running:
+            # ── A3：补偿式定时 ──────────────────────────────────────────
+            now = time.perf_counter()
+            sleep_time = next_tick - now
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            next_tick += SEND_INTERVAL
+            # 防止长时间阻塞后 next_tick 严重落后导致连续空转
+            if next_tick < time.perf_counter() - SEND_INTERVAL:
+                next_tick = time.perf_counter() + SEND_INTERVAL
+
+            # ── A1：串口可用性检查 ──────────────────────────────────────
+            if not (self.serial_port and self.serial_port.is_open):
+                if not self._try_reconnect():
+                    # 重连彻底失败，退出线程
+                    print("串口重连失败次数已达上限，发送线程退出")
+                    self.running = False
+                    break
+                continue  # 重连成功后从下一个 tick 开始正常发送
+
+            # ── 编码 ────────────────────────────────────────────────────
             try:
-                if self.serial_port and self.serial_port.is_open:
-                    # 尝试编码当前控制数据
-                    # 在锁内完成编码，确保编码期间 shared_data 不被其他线程修改（竞态保护）
-                    # with 语句保证即使 encode_data 抛出异常，锁也会被自动释放，不会死锁
-                    try:
-                        with self.shared_data._lock:
-                            packet = encode_data(self.shared_data)
-                    except Exception as enc_err:
-                        # 编码阶段出现异常时，优先复用上一帧数据，避免打断发送线程
-                        print(f"编码控制数据出错，使用上一帧数据继续发送: {enc_err}")
-                        packet = None
+                with self.shared_data._lock:
+                    packet = encode_data(self.shared_data)
+            except Exception as enc_err:
+                print(f"编码控制数据出错，使用上一帧数据继续发送: {enc_err}")
+                packet = None
 
-                    # 如果本帧编码失败或返回None，则尝试发送上一帧数据
-                    if packet is None:
-                        packet_to_send = self._last_packet
-                        # 若还没有上一帧可用，则跳过本次发送
-                        if packet_to_send is None:
-                            time.sleep(0.02)
-                            continue
-                        # 不更新last_sent_data，表示这帧是重复发送
-                    else:
-                        packet_to_send = packet
-                        # 获取当前数据状态快照
-                        current_data = {
-                            "main_switch": self.shared_data.main_switch,
-                            "fan_speed": self.shared_data.fan_speed,
-                            "servo_angles": self.shared_data.servo_angles.copy()
-                        }
-                        self.last_sent_data = current_data
-                        self._last_packet = packet_to_send
+            if packet is None:
+                packet_to_send = self._last_packet
+                if packet_to_send is None:
+                    continue  # 还没有任何可用帧，跳过本次
+            else:
+                packet_to_send = packet
+                self.last_sent_data = {
+                    "main_switch": self.shared_data.main_switch,
+                    "fan_speed": self.shared_data.fan_speed,
+                    "servo_angles": self.shared_data.servo_angles.copy(),
+                }
+                self._last_packet = packet_to_send
 
-                    # 无论数据是否变化，都按50Hz发送
-                    self.serial_port.write(packet_to_send)
-                        
-                # 控制发送频率
-                time.sleep(0.02)  # 50Hz发送间隔 (20ms)
-                
-            except Exception as e:
-                # 串口底层错误属于硬件/连接问题，此时结束发送线程
-                print(f"串口发送错误，发送线程已停止: {e}")
-                self.running = False
-                break
+            # ── 发送 ────────────────────────────────────────────────────
+            try:
+                self.serial_port.write(packet_to_send)
+            except serial.SerialException as e:
+                print(f"串口写入失败，尝试重连: {e}")
+                try:
+                    self.serial_port.close()
+                except Exception:
+                    pass
+
+    def _try_reconnect(self) -> bool:
+        """
+        尝试重新打开串口，最多 _RECONNECT_MAX_TRIES 次。
+        成功返回 True，彻底失败返回 False。
+        """
+        port_name = getattr(self.serial_port, 'port', None)
+        baudrate  = getattr(self.serial_port, 'baudrate', 115200)
+
+        if port_name is None:
+            return False
+
+        for attempt in range(1, _RECONNECT_MAX_TRIES + 1):
+            if not self.running:
+                return False
+            try:
+                self.serial_port.close()
+            except Exception:
+                pass
+            try:
+                self.serial_port.open()
+                print(f"串口 {port_name} 重连成功（第 {attempt} 次尝试）")
+                return True
+            except serial.SerialException:
+                print(f"串口 {port_name} 重连失败（{attempt}/{_RECONNECT_MAX_TRIES}），{_RECONNECT_INTERVAL}秒后重试")
+                time.sleep(_RECONNECT_INTERVAL)
+
+        return False
                 
     def get_last_sent_info(self):
         """获取最后发送的数据信息"""
