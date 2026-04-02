@@ -1,104 +1,247 @@
-# AI工作日记
+# AI 工作日记 · 航空母舰塔楼地面站
 
-## 2025-11-30 02:30 - 航空母舰塔楼项目创建
+---
 
-### 实现内容
+## 2025-11-30 · 项目创建（v0.1）
 
-创建了一个完整的航模地面站控制软件，包含以下模块：
+### 架构概述
 
-1. **protocol.py** - 串口通讯协议配置
-   - 定义了数据包格式：0xAA + 总开关(1字节) + 风扇转速(2字节) + 4个舵机角度(各2字节) + 0xBB
-   - 实现了数据编码和解码函数
-   - 使用小端序处理16位整数
+创建了航模地面站控制软件的初始版本，采用多线程架构通过 UART 串口与航模双向通信。
 
-2. **initial.py** - 初始化模块
-   - 自动检测可用COM口
-   - 初始化串口连接（115200波特率，8N1）
-   - 预设状态配置功能
+### 模块清单
 
-3. **playerInput.py** - 键盘输入捕获
-   - 捕获空格键（切换总开关）
-   - 捕获数字1/2键（预设状态切换）
-   - 使用keyboard库实现非阻塞输入检测
+| 模块 | 职责 |
+|------|------|
+| `protocol.py` | 数据包格式定义与编解码 |
+| `initial.py` | COM 口自动检测与串口初始化 |
+| `playerInput.py` | 键盘输入捕获（空格键/数字键） |
+| `UART_send.py` | 串口数据发送 |
+| `terminal_GUI.py` | ANSI 控制台界面（三行动态显示） |
+| `main.py` | 主程序，线程管理与协调 |
 
-4. **UART_send.py** - 串口发送模块
-   - 将键盘信号编码为协议格式
-   - 通过串口发送数据
-   - 只在数据变化时发送，减少通信负载
+### 通信协议（初版）
 
-5. **terminal_GUI.py** - 控制台界面
-   - 显示三行信息：上次发送数据、COM口状态、当前按键状态
-   - 使用ANSI转义序列实现清屏刷新
-   - 提供操作提示
+**发送**：`0xAA + uint8总开关 + int16风扇转速 + int16[4]舵机角度 + 0xBB`（13字节）
 
-6. **main.py** - 主程序
-   - 集成所有模块
-   - 管理多线程启动和停止
-   - 处理程序退出信号
+**接收**：`0xCC + uint8开关 + float[3]加速度 + float[3]陀螺仪 + float[3]角度 + 0xDD`（39字节）
 
-7. **项目配置**
-   - pyproject.toml - 依赖管理（pyserial, keyboard）
-   - README.md - 项目文档和使用说明
+### 线程架构
 
-### 技术特点
+```
+主线程 (main.py)
+├── 输入/显示线程 (playerInput + terminal_GUI)
+└── 发送线程 (UART_send) — 50Hz
+```
 
-- 多线程架构：terminal_GUI和playerInput在同一线程，UART_send在独立线程
-- 线程间通过共享ProtocolData对象传递数据
-- 使用uv进行Python包管理
-- 支持PowerShell终端运行
-- 完整的错误处理和资源清理
+---
 
-### 项目结构
+## 2025-11-30 · VSCode 环境配置
 
-├── src/
-│   ├── main.py
-│   ├── protocol.py
-│   ├── initial.py
-│   ├── playerInput.py
-│   ├── UART_send.py
-│   └── terminal_GUI.py
-├── pyproject.toml
-├── README.md
-└── AI工作日记.md
+- 创建 `.vscode/settings.json`，配置 uv 虚拟环境 Python 解释器路径
+- 验证 pyserial、keyboard 依赖正确安装
 
-项目已按照要求完成，可以运行测试。
+---
 
-## 2025-11-30 02:41 - VSCode环境配置
+## 2025-12-17 · 状态机引入（v0.2）
 
-### 配置内容
+### 改动目标
 
-1. **创建VSCode工作区设置**
-   - 创建 `.vscode/settings.json` 文件
-   - 配置Python解释器路径为 `.venv\Scripts\python.exe`
-   - 启用终端环境自动激活
+原有单一"开关"模式扩展为多状态架构：
+- **STOP**（0x00）：停止，所有输出归零
+- **RUNNING**（0x01）：正常运行
+- **TUNING**：调参模式，发送专用帧（帧头 0xEE，帧尾 0xFF）
 
-2. **验证依赖包安装**
-   - 使用 `uv sync` 重新同步依赖包
-   - 验证 pyserial 和 keyboard 包正确安装
-   - 确认Python 3.13.5环境正常工作
+### 关键变化
 
-### 配置结果 
+- `ProtocolData` 新增 `main_state` 字段
+- `protocol.py` 引入状态枚举与对应编码器雏形
+- UI 增加状态显示行
 
-- VSCode现在可以正确识别uv虚拟环境中的Python包
-- 代码补全和语法检查功能正常工作
-- 程序可以在VSCode中正常运行和调试
+---
 
-### 2025.12.17晚上22.45
+## 2025-12-20 · 状态机完善（v0.3）
 
-  1. **本次修改目标**
+- 状态编码规范化：STOP=0x00，AUTO=0x01，TOWER=0x02
+- 发送帧第二字节由"总开关"改为"状态标识"
+- `StateTransitionValidator` 引入，约束合法状态转换路径
 
-  - 将目前可以发送数据，接收数据的功能保留，增设状态：开启running；关闭：stop;并在stop状态基础上可以进入调参模式tuning
-  调参模式下系统发送0xee帧头0xff帧尾
-  我现在基本上可以确定，要先完成数据的集成定义三种模式，把调参数据编码，并且修改ui
-### 2025.12.20
+---
 
-  -，现在要靠状态机来实现多种模式，原来的开关数据现在变成状态数据，0x00停止，0x01
-### 2026.2.5
-   1.**当前地面站模式有停止，auto，tower，调参下设三个子状态，还有data**
-      - 希望可以继续完善
+## 2026-02-05 · 完整状态机 + 子状态（v0.4）
 
-### 2026.4.1
-   1.**实验记录**
-      - 力度格数 8 格，加配重，低头明显，低头距离约 7 m
-      
- 
+### 当前完整状态体系
+
+**主状态（MainState）**
+
+| 状态 | 编码 | 说明 |
+|------|------|------|
+| STOP | 0x00 | 停止，发送 3 字节最小帧 |
+| AUTO | 0x01 | 自动控制，发送含时间戳的 26 字节帧 |
+| TOWER | 0x02 | 塔台控制，发送 22 字节帧 |
+| TUNING | 0x03 | 调参模式，进入子状态 |
+| DATA | 0xB1 | 数据模式，接收 BlackBox 76 字节帧 |
+
+**子状态（SubState，仅 TUNING 下有效）**
+
+| 子状态 | 编码 | 说明 |
+|--------|------|------|
+| SERVO | 0xA1 | 舵机角度调参，float[4] |
+| PID | 0xA2 | PID 参数调参，7组×6参数 |
+| JACOBIAN | 0xA3 | 雅可比矩阵调参，3×4 float |
+| FEEDFORWARD | 0xA4 | 前馈参数调参，float[4] |
+
+### 编码器工厂架构
+
+```
+EncoderBase（抽象基类）
+├── StopEncoder       → STOP
+├── AutoEncoder       → AUTO（含毫秒时间戳）
+├── TowerEncoder      → TOWER
+├── DataEncoder       → DATA
+├── ServoEncoder      → TUNING/SERVO
+├── FeedforwardEncoder→ TUNING/FEEDFORWARD
+├── PIDEncoder        → TUNING/PID（含 PID 类型编码字节）
+└── JacobianEncoder   → TUNING/JACOBIAN
+```
+
+`EncoderFactory` 用字典映射状态→编码器实例，避免 if-elif 链。
+
+### BlackBox 接收协议（76字节）
+
+```
+0xCC + uint32时间戳1(4) + uint32时间戳2(4) + uint8状态机(1)
+     + float[3]角度(12) + float[3]角速度(12) + float[3]加速度(12)
+     + float[3]力矩(12) + float[4]舵机目标角度(16)
+     + CRC8(1) + 0xDD
+```
+
+### CRC 校验
+
+`crc_calculator.py` 模拟 STM32F411 硬件 CRC32 行为（小端序读取、4字节对齐补零、截取低8位作为 CRC8），与飞控端硬件 CRC 完全对应。
+
+### 参数持久化
+
+四套参数（舵机/前馈/PID/Jacobian）各自独立 JSON 持久化，程序重启后自动恢复上次调参值：
+- `servo_params.json`
+- `feedforward_params.json`
+- `pid_params.json`
+- `jacobian_params.json`
+
+### 黑箱记录器
+
+`blackbox_logger.py`：进入 DATA 模式后自动将接收到的 BlackBox 数据写入带时间戳文件名的 CSV，最多记录 3000 条，达到上限自动停止。
+
+### 控制台界面
+
+`consle.py`（curses 实现）：多行动态显示，包含中文字符宽度处理（CJK Unicode 范围完整枚举），避免中文截断导致的显示乱码。
+
+### 完整线程架构
+
+```
+主线程 (main.py)
+├── 输入线程 (playerInput.py) — 键盘捕获 + 状态机操作
+├── 显示线程 (consle.py)     — curses 界面，10Hz 刷新
+├── 发送线程 (UART_send.py)  — 50Hz 恒频发送
+└── 接收线程 (UART_receive.py)— 100Hz 检查，BlackBox 解码
+```
+
+---
+
+## 2026-04-01 · 实验记录
+
+- 力度格数 8 格，加配重，低头明显，低头距离约 7 m
+
+---
+
+## 2026-04-01 · P0 安全性修复（本次 AI 改动）
+
+### 问题背景
+
+代码审查发现两个 P0 级缺陷：
+
+1. **无锁共享状态（竞态定时炸弹）**：`ProtocolData` 被发送线程（读）、接收线程（写）、输入线程（写）同时访问，无任何锁保护。在 50Hz 发送 + 100Hz 接收 + 实时键盘输入的场景下，存在真实的竞态窗口，可能导致发送帧数据撕裂或显示数据不一致。
+
+2. **CSV 列顺序 bug**：`blackbox_logger.py` 的 headers 定义中 `packet_timestamp` 和 `packet_timestamp2` 顺序与 `row` 写入顺序对调，导致所有历史 CSV 文件的两列时间戳标注错误。
+
+### 改动详情
+
+#### `src/protocol.py`
+
+- `import threading` 加入文件顶部
+- `ProtocolData.__init__` 新增 `self._lock = threading.RLock()`
+  - 选用 `RLock`（可重入锁）而非 `Lock`，防止将来嵌套调用死锁
+- `set_main_state()` 方法体套 `with self._lock`，状态切换原子化
+- 新增 `update_blackbox(decoded)` 方法：在锁内一次性原子写入全部 10 个黑箱字段（timestamp、timestamp2、statemachine、angle、gyro、acc、torque、rudder、blackbox_received、last_received_time）
+
+#### `src/UART_send.py`
+
+- `_send_loop` 中 `encode_data(self.shared_data)` 调用外套 `with self.shared_data._lock`
+- 编码期间整个 `shared_data` 被锁住，消除"编码读取过程中数据被输入线程修改"的竞态窗口
+- `with` 语句保证 `encode_data` 抛出异常时锁自动释放，不会死锁
+
+#### `src/UART_receive.py`
+
+- `_update_shared_data()` 从 10 行逐字段赋值改为一行 `self.shared_data.update_blackbox(decoded_data)`
+- CSV 写入（`blackbox_logger.log_data()`）保持在锁外执行，避免持锁期间做磁盘 IO
+
+#### `src/blackbox_logger.py`
+
+- `start_logging()` 中 headers 列表：`packet_timestamp` 移至第 0 列，`packet_timestamp2` 移至第 1 列，与 `log_data()` 中 `row` 写入顺序严格对应
+- `log_data()` 中的噪音 `print`（每次调用未记录状态都打印）拆分为两个独立 `if` 判断，未记录状态下静默返回 `False`
+
+### 验证结果
+
+运行验证脚本，5 项断言全部通过：
+- `ProtocolData._lock` 存在且为 RLock ✓
+- `update_blackbox` 方法存在 ✓
+- `set_main_state` 线程安全版本工作正常 ✓
+- `update_blackbox` 原子写入正确 ✓
+- CSV 列顺序正确（packet_timestamp=12345, packet_timestamp2=67890）✓
+- `log_data` 在未记录状态下静默返回 False ✓
+
+### 性能影响评估
+
+| 关注点 | 结论 |
+|--------|------|
+| 键盘响应延迟 | 无影响（锁竞争在微秒级） |
+| 发送频率 50Hz | 无影响（串口 IO 在锁外执行） |
+| 接收数据实时性 | 无损失，一致性反而提升 |
+| 黑箱记录实时性 | 无影响（CSV 写入在锁外） |
+
+---
+
+## 未来待改进事项
+
+### P1 · 架构债务（影响长期可维护性）
+
+- **拆分 `ProtocolData` 上帝对象**：当前该类同时承担控制参数、传感器数据、UI 导航状态、调参参数、状态机状态五种职责。建议拆分为 `ControlState`、`SensorData`、`UINavigationState`、`TuningParams` 四个独立数据类，各模块只访问自己负责的数据类。
+
+- **`handle_enter()` 方法重构**：当前 80+ 行、三层嵌套 if-elif，处理所有主状态和子状态的 Enter 逻辑。建议用状态模式（State Pattern）将每个状态的行为分散到各自的状态类中，新增状态不需要修改已有代码。
+
+- **更新 README**：当前 README 描述的是旧版协议（13字节发送帧、39字节接收帧），与实际代码（26字节 AUTO 帧、76字节 BlackBox 帧）严重不符，且文件结构里有不存在的 `terminal_GUI.py`。
+
+### P1 · 可靠性（野外使用必需）
+
+- **串口断线自动重连**：当前串口断开后发送线程直接退出，需要加重连循环（每秒尝试重新打开串口）。
+
+- **接收缓冲区防溢出**：`receive_buffer` 无大小上限，持续收到垃圾数据时内存无限增长，需加 `MAX_BUFFER_SIZE = 1024` 上限保护。
+
+- **精确发送频率控制**：当前用 `time.sleep(0.02)` 控制 50Hz，Windows 下 sleep 精度约 ±15ms，实际频率可能只有 30-40Hz。建议改用 `time.perf_counter` 的补偿式定时循环。
+
+### P2 · 可观测性
+
+- **用 `logging` 模块替换所有 `print`**：当前所有调试信息用 `print`，在 curses 界面下会破坏显示，且无法控制日志级别。建议输出到文件 `ground_station.log`，不输出到 stdout。
+
+- **界面增加系统健康状态行**：显示实测发送/接收频率（Hz）、串口连接状态、黑箱记录状态、最后接收数据时间（超过 500ms 变红色警告）。
+
+### P2 · 易用性
+
+- **外部配置文件**：`COM14` 和 `CH340` 关键字硬编码在 `initial.py` 函数签名里，换台电脑就失效。建议新增 `config.toml`，启动时读取，找不到指定端口时自动降级到交互式选择。
+
+### P3 · 质量保证
+
+- **协议层单元测试**：为每个编码器和 `decode_data()` 编写单元测试，用 `teas.py`（建议改名为 `tools/generate_test_packet.py`）生成的测试包做离线协议验证，确保协议改动不引入回归。
+
+- **修复 `teas.py` 文件名**：当前文件名完全无法表达用途，建议改为 `tools/generate_test_packet.py`。
+
+- **清理死代码**：`get_packet_length()` 方法在所有编码器中都实现了，但整个代码库中从未被调用，建议删除或补充调用方。

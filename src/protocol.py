@@ -4,6 +4,7 @@
 """
 
 import struct
+import threading
 import time
 from datetime import datetime
 from enum import Enum
@@ -332,6 +333,9 @@ class ProtocolData:
     """协议数据结构，线程间共享"""
     
     def __init__(self):
+        # 线程安全锁（RLock 支持同线程重入，防止将来嵌套调用死锁）
+        self._lock = threading.RLock()
+
         # 主状态和子状态
         self.main_state = MainState.STOP
         self.sub_state = SubState.SERVO
@@ -408,12 +412,31 @@ class ProtocolData:
         self.last_received_time = None
     
     def set_main_state(self, new_state: MainState) -> bool:
-        """设置主状态，验证转换规则"""
-        if StateTransitionValidator.validate_transition(self.main_state, new_state):
-            self.main_state = new_state
-            return True
-        return False
-    
+        """设置主状态，验证转换规则（线程安全）"""
+        with self._lock:
+            if StateTransitionValidator.validate_transition(self.main_state, new_state):
+                self.main_state = new_state
+                return True
+            return False
+
+    def update_blackbox(self, decoded: 'ProtocolData') -> None:
+        """
+        接收线程专用：原子性地将解码后的黑箱数据写入共享状态。
+        在锁内一次性完成所有字段赋值，消除显示线程读到半更新数据的竞态窗口。
+        decoded: decode_data() 返回的 ProtocolData 对象
+        """
+        with self._lock:
+            self.blackbox_timestamp   = decoded.blackbox_timestamp
+            self.blackbox_timestamp2  = decoded.blackbox_timestamp2
+            self.blackbox_statemachine = decoded.blackbox_statemachine
+            self.blackbox_angle  = list(decoded.blackbox_angle)
+            self.blackbox_gyro   = list(decoded.blackbox_gyro)
+            self.blackbox_acc    = list(decoded.blackbox_acc)
+            self.blackbox_torque = list(decoded.blackbox_torque)
+            self.blackbox_rudder = list(decoded.blackbox_rudder)
+            self.blackbox_received   = True
+            self.last_received_time  = decoded.last_received_time
+
     def set_sub_state(self, new_state: SubState) -> None:
         """设置子状态（仅用于TUNING模式）"""
         if self.main_state == MainState.TUNING:

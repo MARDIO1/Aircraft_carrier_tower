@@ -52,11 +52,12 @@ class BlackBoxLogger:
             self.log_file = open(filepath, 'w', newline='', encoding='utf-8')
             self.csv_writer = csv.writer(self.log_file)
             
-            # 写入CSV标题行 - 只记录59字节数据包中实际包含的数据
-            # timestamp字段现在是数据包时间戳（4字节无符号整数）
-            headers = [ 
-                'packet_timestamp2',
-                'packet_timestamp',  # 数据包时间戳（4字节无符号整数）
+            # 写入CSV标题行 - 列顺序与 log_data() 中 row 的写入顺序严格对应
+            # packet_timestamp  → blackbox_timestamp  （主时间戳，row 第0列）
+            # packet_timestamp2 → blackbox_timestamp2 （第二时间戳，row 第1列）
+            headers = [
+                'packet_timestamp',   # 数据包主时间戳（blackbox_timestamp，4字节无符号整数）
+                'packet_timestamp2',  # 第二时间戳（blackbox_timestamp2）
                 'statemachine',
                 'angle_roll', 'angle_pitch', 'angle_yaw',
                 'gyro_x', 'gyro_y', 'gyro_z',
@@ -123,9 +124,10 @@ class BlackBoxLogger:
         Returns:
             bool: 是否成功记录
         """
-        if not self.is_logging or self.record_count >= self.max_records:
-            print(f"记录器状态: is_logging={self.is_logging}, record_count={self.record_count}, max_records={self.max_records}")
-            return False
+        if not self.is_logging:
+            return False  # 未在记录中，静默返回
+        if self.record_count >= self.max_records:
+            return False  # 已达上限，静默返回（stop_logging 已在达到上限时打印过提示）
             
         try:
             # 记录数据包时间戳（4字节无符号整数）

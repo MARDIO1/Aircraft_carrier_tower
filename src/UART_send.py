@@ -46,8 +46,11 @@ class UARTSender:
             try:
                 if self.serial_port and self.serial_port.is_open:
                     # 尝试编码当前控制数据
+                    # 在锁内完成编码，确保编码期间 shared_data 不被其他线程修改（竞态保护）
+                    # with 语句保证即使 encode_data 抛出异常，锁也会被自动释放，不会死锁
                     try:
-                        packet = encode_data(self.shared_data)
+                        with self.shared_data._lock:
+                            packet = encode_data(self.shared_data)
                     except Exception as enc_err:
                         # 编码阶段出现异常时，优先复用上一帧数据，避免打断发送线程
                         print(f"编码控制数据出错，使用上一帧数据继续发送: {enc_err}")

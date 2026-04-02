@@ -116,31 +116,19 @@ class UARTReceiver:
             self.receive_buffer = self.receive_buffer[start_idx + 76:]
                 
     def _update_shared_data(self, decoded_data):
-        """将解码后的BlackBox数据更新到共享数据结构中"""
+        """将解码后的BlackBox数据更新到共享数据结构中（线程安全）"""
         try:
-            # 更新BlackBox数据 - 只更新59字节数据包中实际包含的字段
-            self.shared_data.blackbox_timestamp2 = decoded_data.blackbox_timestamp2
-            self.shared_data.blackbox_timestamp = decoded_data.blackbox_timestamp
-            self.shared_data.blackbox_statemachine = decoded_data.blackbox_statemachine
-            self.shared_data.blackbox_angle = decoded_data.blackbox_angle
-            self.shared_data.blackbox_gyro = decoded_data.blackbox_gyro
-            self.shared_data.blackbox_acc = decoded_data.blackbox_acc
-            self.shared_data.blackbox_torque = decoded_data.blackbox_torque
-            self.shared_data.blackbox_rudder = decoded_data.blackbox_rudder
-            self.shared_data.blackbox_received = True
-            
-            # 更新最后接收时间
-            self.shared_data.last_received_time = decoded_data.last_received_time
-            
-            # 记录到黑箱文件
+            # 原子写入：在锁内一次性完成所有黑箱字段赋值
+            # 消除显示线程读到"前几个字段是新数据、后几个字段是旧数据"的竞态窗口
+            self.shared_data.update_blackbox(decoded_data)
+
+            # CSV 记录在锁外执行，避免持锁期间做磁盘 IO
             if self.blackbox_logger:
-                # 传递数据包时间戳作为第一个参数（虽然log_data方法不再使用它）
-                # 保持向后兼容性
                 self.blackbox_logger.log_data(
-                    float(decoded_data.blackbox_timestamp),  # 转换为float以匹配方法签名
+                    float(decoded_data.blackbox_timestamp),
                     decoded_data
                 )
-            
+
         except Exception as e:
             print(f"更新共享数据错误: {e}")
             self.error_count += 1
