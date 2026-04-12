@@ -47,7 +47,7 @@ class Initializer:
             if description_keyboard in port['description']:
                 return port['device'] 
         return None
-    def initialize_serial(self,com_port="COM14",auto_keyword="CH340"):
+    def initialize_serial(self,com_port=None,auto_keyword="CH340"):
         """
         初始化串口连接
         Args:
