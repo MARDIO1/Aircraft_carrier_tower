@@ -38,6 +38,7 @@ class AutoTuner:
         base_dir = Path(__file__).resolve().parent.parent
         self.servo_file = base_dir / "servo_params.json"
         self.feedforward_file = base_dir / "feedforward_params.json"
+        self.pid_file = base_dir / "pid_params.json"
 
     # ==================== 公共入口 ====================
 
@@ -60,6 +61,16 @@ class AutoTuner:
 
         if ff_target is not None:
             self._apply_feedforward_target(ff_target)
+
+    def apply_pid_from_file(self) -> None:
+        """从 JSON 文件读取 PID 参数矩阵，并依次写入 PID 各组。"""
+        pid_target = self._load_pid_target()
+
+        if pid_target is None:
+            print("自动调参: 未找到有效的PID配置，已取消")
+            return
+
+        self._apply_pid_target(pid_target)
 
     # ==================== 内部步骤 ====================
 
@@ -132,6 +143,36 @@ class AutoTuner:
         time.sleep(self.hold_time)
         self._back_to_stop()
 
+    def _apply_pid_target(self, target: List[List[float]]) -> None:
+        """写入 PID 参数矩阵，并按组发送。"""
+        pid_rows = len(self.data.pid_param)
+        pid_cols = len(self.data.pid_param[0]) if pid_rows > 0 else 0
+
+        if pid_rows == 0 or pid_cols == 0:
+            print("自动调参: 当前PID参数维度非法，已忽略")
+            return
+
+        if len(target) != pid_rows or any(len(row) != pid_cols for row in target):
+            print(f"自动调参: PID目标维度应为{pid_rows}x{pid_cols}，已忽略")
+            return
+
+        if not self._switch_to_tuning_substate(SubState.PID):
+            return
+
+        self.data.pid_param = [[float(v) for v in row] for row in target]
+        print("自动调参: 已加载PID目标矩阵，开始逐组下发")
+
+        # 仿照手动 Enter PID 组的行为，逐组切换发送目标。
+        for pid_index in range(pid_rows):
+            self.data.selected_pid = pid_index
+            self.data.pid_tuning_state = pid_index
+            print(f"自动调参: 正在下发PID组 {pid_index}")
+            time.sleep(self.hold_time)
+
+        # 结束时回到"不改"状态，避免持续占用PID组切换编码。
+        self.data.pid_tuning_state = -1
+        self._back_to_stop()
+
     # ==================== 配置加载 ====================
 
     def _load_servo_target(self) -> Optional[List[float]]:
@@ -156,4 +197,21 @@ class AutoTuner:
                 return [float(v) for v in vals]
         except Exception as e:
             print(f"自动调参: 读取前馈配置失败: {e}")
+        return None
+
+    def _load_pid_target(self) -> Optional[List[List[float]]]:
+        if not self.pid_file.exists():
+            return None
+        try:
+            data = json.loads(self.pid_file.read_text(encoding="utf-8"))
+            vals = data.get("pid_param")
+            if isinstance(vals, list) and vals:
+                parsed: List[List[float]] = []
+                for row in vals:
+                    if not isinstance(row, list):
+                        return None
+                    parsed.append([float(v) for v in row])
+                return parsed
+        except Exception as e:
+            print(f"自动调参: 读取PID配置失败: {e}")
         return None

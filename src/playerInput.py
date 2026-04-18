@@ -52,17 +52,17 @@ class PlayerInput:
         self._load_last_tuned_pid_param()
         self._load_last_tuned_jacobian()
         
-        # 预设状态
+        # 预设状态：数字 1-9 对应风扇 1000、1100、1200 ... 1800
         self.preset_states = {
             1: {"main_switch": 1, "fan_speed": 1000, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            2: {"main_switch": 1, "fan_speed": 1500, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            3: {"main_switch": 1, "fan_speed": 1300, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            4: {"main_switch": 1, "fan_speed": 1400, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            5: {"main_switch": 1, "fan_speed": 1600, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            6: {"main_switch": 1, "fan_speed": 1700, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            7: {"main_switch": 1, "fan_speed": 1800, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            8: {"main_switch": 1, "fan_speed": 1900, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
-            9: {"main_switch": 1, "fan_speed": 1990, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            2: {"main_switch": 1, "fan_speed": 1100, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            3: {"main_switch": 1, "fan_speed": 1200, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            4: {"main_switch": 1, "fan_speed": 1300, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            5: {"main_switch": 1, "fan_speed": 1400, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            6: {"main_switch": 1, "fan_speed": 1500, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            7: {"main_switch": 1, "fan_speed": 1600, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            8: {"main_switch": 1, "fan_speed": 1700, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
+            9: {"main_switch": 1, "fan_speed": 1800, "servo_angles": [0.0, 0.0, 0.0, 0.0]},
         }
         
         # 注册导航回调
@@ -101,7 +101,12 @@ class PlayerInput:
         try:
             key = event.name
 
-            # 一键自动调参热键：F9
+            # 一键自动调参热键：F8（PID）
+            if key == 'f8':
+                self._start_pid_auto_tune()
+                return
+
+            # 一键自动调参热键：F9（舵机 + 前馈）
             if key == 'f9':
                 self._start_auto_tune()
                 return
@@ -247,6 +252,26 @@ class PlayerInput:
                 self.auto_tuner.apply_servo_and_feedforward_from_files()
             except Exception as e:
                 print(f"自动调参执行失败: {e}")
+            finally:
+                self.auto_tuning = False
+
+        self.auto_tune_thread = threading.Thread(target=worker)
+        self.auto_tune_thread.daemon = True
+        self.auto_tune_thread.start()
+
+    def _start_pid_auto_tune(self):
+        """启动一键自动调参（PID）。"""
+        if self.auto_tuning:
+            print("自动调参已在进行中，忽略重复触发")
+            return
+
+        self.auto_tuning = True
+
+        def worker():
+            try:
+                self.auto_tuner.apply_pid_from_file()
+            except Exception as e:
+                print(f"PID自动调参执行失败: {e}")
             finally:
                 self.auto_tuning = False
 
