@@ -131,6 +131,15 @@ class PlayerInput:
                 prev_confirm = self.shared_data.nav_confirm
                 self.state_manager.handle_enter()
 
+                # 通过导航进入DATA模式时，自动开启黑箱记录
+                entered_data = (
+                    prev_main_state != MainState.DATA
+                    and self.shared_data.main_state == MainState.DATA
+                )
+                if entered_data:
+                    print("已通过导航切换到DATA模式")
+                    self._start_blackbox_logging()
+
                 # 进入TUNING时先恢复一次舵机记忆参数，避免界面继续显示四个0
                 entered_tuning = (
                     prev_main_state != MainState.TUNING
@@ -197,8 +206,8 @@ class PlayerInput:
             elif key == 'space':
                 self._toggle_main_switch()
             
-            # 'D'键：在STOP模式下直接切换到DATA模式
-            elif key == 'd' and self.shared_data.main_state == MainState.STOP:
+            # 'D'键：快速切换到DATA模式（任意模式尝试切入）
+            elif key == 'd':
                 self._switch_to_data()
             
             # 'L'键：在DATA模式下切换黑箱记录状态
@@ -331,11 +340,27 @@ class PlayerInput:
     
     def _switch_to_data(self):
         """切换到DATA状态"""
-        if self.shared_data.set_main_state(MainState.DATA):
+        # 已在DATA模式时，确保黑箱记录已启动
+        if self.shared_data.main_state == MainState.DATA:
+            print("当前已是DATA模式")
+            self._start_blackbox_logging()
+            return
+
+        # 先尝试直接切换
+        switched = self.shared_data.set_main_state(MainState.DATA)
+
+        # 若当前状态规则不允许（如AUTO/TOWER），尝试经STOP中转再进入DATA
+        if not switched:
+            if self.shared_data.set_main_state(MainState.STOP):
+                switched = self.shared_data.set_main_state(MainState.DATA)
+
+        if switched:
             self._clear_input_buffer()
             print("已切换到DATA模式")
             # 自动开始黑箱记录
             self._start_blackbox_logging()
+        else:
+            print(f"切换DATA失败，当前状态: {self.shared_data.main_state.name}")
     
     def _toggle_blackbox_logging(self):
         """切换黑箱记录状态"""

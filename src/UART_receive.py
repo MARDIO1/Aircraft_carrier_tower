@@ -6,7 +6,7 @@
 import threading
 import time
 import struct
-from protocol import decode_data
+from protocol import decode_data, MainState
 from blackbox_logger import BlackBoxLogger
 
 class UARTReceiver:
@@ -126,6 +126,11 @@ class UARTReceiver:
             # 原子写入：在锁内一次性完成所有黑箱字段赋值
             # 消除显示线程读到"前几个字段是新数据、后几个字段是旧数据"的竞态窗口
             self.shared_data.update_blackbox(decoded_data)
+
+            # 兜底：只要已进入DATA模式且记录器未开启，则自动开启黑箱记录
+            if self.blackbox_logger and self.shared_data.main_state == MainState.DATA:
+                if not self.blackbox_logger.is_logging:
+                    self.blackbox_logger.start_logging()
 
             # CSV 记录在锁外执行，避免持锁期间做磁盘 IO
             if self.blackbox_logger:
