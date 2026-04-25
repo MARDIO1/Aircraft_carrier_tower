@@ -148,6 +148,11 @@ class Consle:
         switch = self.shared_data.main_switch
         switch_text = "开关:ON" if switch == 1 else "开关:OFF"
 
+        # AUTO模式下显示保存开关状态
+        save_text = ""
+        if main_state == MainState.AUTO:
+            save_text = f" 保存:{'ON' if self.shared_data.save_switch else 'OFF'}"
+
         fan_text = f"风扇:{self.shared_data.fan_speed}"
 
         servo_str = ','.join([f"{angle:.1f}" for angle in self.shared_data.servo_angles])
@@ -158,7 +163,7 @@ class Consle:
         nav_col = self.shared_data.nav_col
         nav_text = f"导航:[{nav_row},{nav_col}]"
         
-        line = f"{mode_text} {switch_text} {fan_text} {servo_text} {nav_text}"
+        line = f"{mode_text} {switch_text}{save_text} {fan_text} {servo_text} {nav_text}"
          
         self._check_status_changes(main_state.value, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
 

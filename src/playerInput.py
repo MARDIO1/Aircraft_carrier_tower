@@ -214,6 +214,10 @@ class PlayerInput:
             elif key == 'l' and self.shared_data.main_state == MainState.DATA:
                 self._toggle_blackbox_logging()
             
+            # 'S'键：在AUTO模式下切换保存开关
+            elif key == 's' and self.shared_data.main_state == MainState.AUTO:
+                self._toggle_save_switch()
+            
             # 数字输入
             elif key in ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']:
                 number = int(key)
@@ -305,6 +309,7 @@ class PlayerInput:
             # 在STOP状态下，切换到AUTO
             self.shared_data.set_main_state(MainState.AUTO)
             self.shared_data.main_switch = 1
+            self.shared_data.save_switch = 0  # 进入AUTO时重置保存开关
         elif self.shared_data.main_state in [MainState.AUTO, MainState.TOWER]:
             # 在AUTO或TOWER状态下，切换到STOP
             self.shared_data.set_main_state(MainState.STOP)
@@ -325,6 +330,7 @@ class PlayerInput:
         """切换到AUTO状态"""
         if self.shared_data.set_main_state(MainState.AUTO):
             self.shared_data.main_switch = 1
+            self.shared_data.save_switch = 0  # 进入AUTO时重置保存开关
             self._clear_input_buffer()
     
     def _switch_to_tower(self):
@@ -715,6 +721,12 @@ class PlayerInput:
             self.shared_data.selected_param += 1
             self._clear_input_buffer()
     
+    def _toggle_save_switch(self):
+        """切换保存开关状态（仅AUTO模式有效，toggle 0↔1）"""
+        self.shared_data.save_switch = 1 if self.shared_data.save_switch == 0 else 0
+        status = "ON" if self.shared_data.save_switch == 1 else "OFF"
+        print(f"保存开关: {status}")
+
     # ==================== 预设状态方法 ====================
     
     def _set_preset_state(self, preset_num: int):
@@ -734,6 +746,7 @@ class PlayerInput:
                     pass
                 else:
                     self.shared_data.set_main_state(MainState.AUTO)
+                    self.shared_data.save_switch = 0  # 新进入AUTO时重置保存开关
                 
     # ==================== 获取状态方法 ====================
     

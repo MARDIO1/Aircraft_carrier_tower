@@ -136,7 +136,7 @@ class AutoEncoder(EncoderBase):
     """AUTO状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码AUTO状态数据：0xAA + 0x01 + uint32timestamp + int16[1] + float32[4] + crc+0xBB (26字节)"""
+        """编码AUTO状态数据：0xAA + 0x01 + uint32timestamp + int16[1] + float32[4] + uint8 save_switch + crc + 0xBB (27字节)"""
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x01)  # AUTO状态标识
@@ -154,13 +154,15 @@ class AutoEncoder(EncoderBase):
         for angle in data.servo_angles:
             packet.extend(struct.pack('<f', float(angle)))
         
+        packet.extend(struct.pack('<B', data.save_switch))  # 保存开关 uint8
+        
         packet.append(0xBB)  # END_BYTE
         packet_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
 
         return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 26
+        return 27
 
 class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
@@ -344,6 +346,7 @@ class ProtocolData:
         self.main_switch = 0  # 总开关: 0=STOP, 1=AUTO, 2=TOWER
         self.fan_speed = 0    # 风扇转速
         self.servo_angles = [0.0, 0.0, 0.0, 0.0]  # 4个舵机角度
+        self.save_switch = 0  # 保存开关: 0=关闭, 1=开启（仅AUTO模式有效，进入AUTO时自动重置为0）
         # 前馈调参舵面值（与servo_angles独立）
         self.feedforward_values = [0.0, 0.0, 0.0, 0.0]
         
