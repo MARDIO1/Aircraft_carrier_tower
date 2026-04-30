@@ -6,7 +6,7 @@
 import threading
 import time
 import struct
-from protocol import decode_data, MainState
+from protocol import SAVE_TO_FLASH_ACK, decode_data, MainState, verify_crc8
 from blackbox_logger import BlackBoxLogger
 
 class UARTReceiver:
@@ -78,6 +78,8 @@ class UARTReceiver:
         if len(self.receive_buffer) > MAX_BUFFER:
             self.receive_buffer = self.receive_buffer[-256:]
 
+        self._process_save_flash_ack_frames()
+
         # 尝试从缓冲区中提取完整的76字节数据包
         while len(self.receive_buffer) >= 76:
             # 查找帧头 0xCC
@@ -120,6 +122,35 @@ class UARTReceiver:
             # 从缓冲区中移除已处理的数据包
             self.receive_buffer = self.receive_buffer[start_idx + 76:]
                 
+    def _process_save_flash_ack_frames(self):
+        while len(self.receive_buffer) >= 16:
+            start_idx = self.receive_buffer.find(0xCC)
+            if start_idx < 0:
+                if len(self.receive_buffer) > 75:
+                    self.receive_buffer = self.receive_buffer[-75:]
+                return
+            if start_idx > 0:
+                del self.receive_buffer[:start_idx]
+            if len(self.receive_buffer) < 16:
+                return
+
+            packet = bytes(self.receive_buffer[:16])
+            if packet[1] == SAVE_TO_FLASH_ACK and packet[-1] == 0xDD:
+                if verify_crc8(bytearray(packet), crc_position=-2, calc_start=0):
+                    self.shared_data.update_save_flash_ack(packet[2])
+                    self.receive_count += 1
+                    self.last_receive_time = time.time()
+                    print(f"Flash save ack received, status={packet[2]}")
+                else:
+                    self.error_count += 1
+                    print("Flash save ack CRC failed")
+                del self.receive_buffer[:16]
+                continue
+
+            if len(self.receive_buffer) >= 76:
+                return
+            del self.receive_buffer[0]
+
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中（线程安全）"""
         try:

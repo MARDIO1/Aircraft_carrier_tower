@@ -110,6 +110,10 @@ class PlayerInput:
             if key == 'f9':
                 self._start_auto_tune()
                 return
+
+            if key == 'f10':
+                self._send_save_to_flash()
+                return
             
             # 导航控制
             if key == 'up':
@@ -247,6 +251,10 @@ class PlayerInput:
             
         except Exception as e:
             print(f"按键处理错误: {e}")
+
+    def _send_save_to_flash(self):
+        self.shared_data.request_save_to_flash()
+        print("Flash save request queued")
 
     def _start_auto_tune(self):
         """启动一键自动调参（舵机 + 前馈）。"""

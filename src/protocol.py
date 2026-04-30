@@ -11,6 +11,9 @@ from enum import Enum
 from typing import Optional, List, Tuple, Dict, Any
 from crc_calculator import add_crc8_to_packet
 from crc_calculator import extract_payload_with_crc, verify_crc8
+
+SAVE_TO_FLASH_CMD = 0xA5
+SAVE_TO_FLASH_ACK = 0xA6
 # PID类型编码映射
 # 说明：
 #  - 前 6 组必须与飞控端 which_PID 一一对应
@@ -308,6 +311,10 @@ class JacobianEncoder(EncoderBase):
 
 # ==================== 编码器工厂 ====================
 
+def encode_save_to_flash() -> bytearray:
+    packet = bytearray([0xAA, SAVE_TO_FLASH_CMD, 0xBB])
+    return add_crc8_to_packet(packet, calc_start=0, calc_end=-1)
+
 class EncoderFactory:
     """编码器工厂，根据状态创建对应的编码器"""
     
@@ -403,6 +410,10 @@ class ProtocolData:
 
         self.blackbox_rudder = [0.0, 0.0, 0.0, 0.0]     # 舵机目标角度
         self.blackbox_received = False                  # 是否接收到BlackBox数据
+        self.pending_save_to_flash = False
+        self.save_flash_ack_received = False
+        self.save_flash_status = None
+        self.save_flash_last_time = None
         
         # 接收数据（保留字段，但不再使用普通数据包）
         self.received_switch = 0
@@ -449,6 +460,23 @@ class ProtocolData:
         else:
             return EncoderFactory.get_encoder(self.main_state)
 
+    def request_save_to_flash(self) -> None:
+        with self._lock:
+            self.pending_save_to_flash = True
+
+    def take_save_to_flash_request(self) -> bool:
+        with self._lock:
+            if not self.pending_save_to_flash:
+                return False
+            self.pending_save_to_flash = False
+            return True
+
+    def update_save_flash_ack(self, status: int) -> None:
+        with self._lock:
+            self.save_flash_ack_received = True
+            self.save_flash_status = status
+            self.save_flash_last_time = time.time()
+
 # ==================== 向后兼容函数 ====================
 
 def encode_data(data: ProtocolData) -> Optional[bytearray]:
@@ -456,6 +484,9 @@ def encode_data(data: ProtocolData) -> Optional[bytearray]:
     向后兼容的编码函数
     使用状态机架构编码数据
     """
+    if data.take_save_to_flash_request():
+        return encode_save_to_flash()
+
     encoder = data.get_current_encoder()
     if encoder:
         return encoder.encode(data)
