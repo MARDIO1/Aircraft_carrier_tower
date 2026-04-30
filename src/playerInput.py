@@ -253,8 +253,39 @@ class PlayerInput:
             print(f"按键处理错误: {e}")
 
     def _send_save_to_flash(self):
-        self.shared_data.request_save_to_flash()
-        print("Flash save request queued")
+        """F10: 启动重发线程循环发送 0xA5，直到收到飞控 ACK 或超时"""
+        import threading
+
+        # 防止重复启动
+        if self.shared_data.save_flash_pending_ack:
+            print("Flash save 请求已在等待中，忽略重复触发")
+            return
+
+        self.shared_data.reset_save_flash_ack()
+        print("Flash save: 开始重发 0xA5 等待飞控 ACK...")
+
+        def retry_worker():
+            max_retries = 15       # 最多重发 15 次
+            interval = 0.2         # 每 200ms 一发
+            for i in range(max_retries):
+                if self.shared_data.save_flash_ack_received:
+                    status = self.shared_data.save_flash_status
+                    if status == 0:
+                        print(f"Flash save 成功! (status={status})")
+                    else:
+                        print(f"Flash save 失败: 飞控返回错误码 status={status}")
+                    self.shared_data.finish_save_flash_ack()
+                    return
+                # 发出请求帧（由发送线程的 encode_data 检测 pending 标志）
+                self.shared_data.request_save_to_flash()
+                time.sleep(interval)
+
+            # 超时
+            print("Flash save 超时: 未收到飞控 ACK")
+            self.shared_data.finish_save_flash_ack()
+
+        t = threading.Thread(target=retry_worker, daemon=True)
+        t.start()
 
     def _start_auto_tune(self):
         """启动一键自动调参（舵机 + 前馈）。"""

@@ -159,7 +159,19 @@ class Consle:
         nav_text = f"导航:[{nav_row},{nav_col}]"
         
         line = f"{mode_text} {switch_text} {fan_text} {servo_text} {nav_text}"
-         
+
+        # 显示 Flash 保存应答状态
+        flash_status = ""
+        if self.shared_data.save_flash_pending_ack:
+            flash_status = " | Flash保存: 等待ACK..."
+        elif self.shared_data.save_flash_ack_received:
+            s = self.shared_data.save_flash_status
+            if s == 0:
+                flash_status = " | Flash保存: ✓ 成功"
+            else:
+                flash_status = f" | Flash保存: ✗ 错误({s})"
+        line += flash_status
+
         self._check_status_changes(main_state.value, switch, self.shared_data.fan_speed, self.shared_data.servo_angles)
 
         stdscr.addstr(row, 0, line)

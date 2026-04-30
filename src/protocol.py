@@ -414,6 +414,7 @@ class ProtocolData:
         self.save_flash_ack_received = False
         self.save_flash_status = None
         self.save_flash_last_time = None
+        self.save_flash_pending_ack = False  # True=重发线程正在等待飞控ACK
         
         # 接收数据（保留字段，但不再使用普通数据包）
         self.received_switch = 0
@@ -476,6 +477,19 @@ class ProtocolData:
             self.save_flash_ack_received = True
             self.save_flash_status = status
             self.save_flash_last_time = time.time()
+
+    def reset_save_flash_ack(self) -> None:
+        """重发线程开始新一轮请求前，重置ACK状态"""
+        with self._lock:
+            self.save_flash_ack_received = False
+            self.save_flash_status = None
+            self.save_flash_last_time = None
+            self.save_flash_pending_ack = True
+
+    def finish_save_flash_ack(self) -> None:
+        """重发线程结束（收到ACK或超时）时调用"""
+        with self._lock:
+            self.save_flash_pending_ack = False
 
 # ==================== 向后兼容函数 ====================
 
