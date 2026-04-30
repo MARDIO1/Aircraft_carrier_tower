@@ -306,3 +306,5 @@ while self.running:
 - **修复 `teas.py` 文件名**：当前文件名完全无法表达用途，建议改为 `tools/generate_test_packet.py`。
 
 - **清理死代码**：`get_packet_length()` 方法在所有编码器中都实现了，但整个代码库中从未被调用，建议删除或补充调用方。
+应该加入雅可比的一键调参，pitch_need是一个float
+,舵机输出限幅是8个float
