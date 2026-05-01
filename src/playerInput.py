@@ -45,12 +45,20 @@ class PlayerInput:
         # Jacobian 调参（3x4 矩阵）
         self.jacobian_persist_file = base_dir / "jacobian_params.json"
         self.last_tuned_jacobian = [row.copy() for row in self.shared_data.jacobian_matrix]
+        # 翼面限幅+pitch前馈调参
+        self.surface_limit_persist_file = base_dir / "surface_limit_params.json"
+        self.last_tuned_surface_limit = {
+            "surface_angle_min_d": list(self.shared_data.surface_angle_min_d),
+            "surface_angle_max_d": list(self.shared_data.surface_angle_max_d),
+            "pitch_need": self.shared_data.pitch_need,
+        }
 
         # 加载上次调参结果（如有），仅覆盖各自模式下的初始值
         self._load_last_tuned_servo_angles()
         self._load_last_tuned_feedforward()
         self._load_last_tuned_pid_param()
         self._load_last_tuned_jacobian()
+        self._load_last_tuned_surface_limit()
         
         # 预设状态：数字 1-9 对应风扇 1000、1100、1200 ... 1800
         self.preset_states = {
@@ -100,6 +108,16 @@ class PlayerInput:
             
         try:
             key = event.name
+
+            # 一键自动调参热键：F6（翼面限幅+pitch前馈）
+            if key == 'f6':
+                self._start_surface_limit_auto_tune()
+                return
+
+            # 一键自动调参热键：F7（Jacobian）
+            if key == 'f7':
+                self._start_jacobian_auto_tune()
+                return
 
             # 一键自动调参热键：F8（PID）
             if key == 'f8':
@@ -203,6 +221,19 @@ class PlayerInput:
                 )
                 if entered_jacobian_confirm:
                     self._apply_last_tuned_jacobian()
+
+                entered_surface_limit_confirm = (
+                    self.shared_data.main_state == MainState.TUNING
+                    and self.shared_data.sub_state == SubState.SURFACE_LIMIT
+                    and self.shared_data.nav_confirm
+                    and not (
+                        prev_main_state == MainState.TUNING
+                        and prev_sub_state == SubState.SURFACE_LIMIT
+                        and prev_confirm
+                    )
+                )
+                if entered_surface_limit_confirm:
+                    self._apply_last_tuned_surface_limit()
             elif key == 'esc':
                 self.state_manager.handle_escape()
             
@@ -253,8 +284,39 @@ class PlayerInput:
             print(f"按键处理错误: {e}")
 
     def _send_save_to_flash(self):
-        self.shared_data.request_save_to_flash()
-        print("Flash save request queued")
+        """F10: 启动重发线程循环发送 0xA5，直到收到飞控 ACK 或超时"""
+        import threading
+
+        # 防止重复启动
+        if self.shared_data.save_flash_pending_ack:
+            print("Flash save 请求已在等待中，忽略重复触发")
+            return
+
+        self.shared_data.reset_save_flash_ack()
+        print("Flash save: 开始重发 0xA5 等待飞控 ACK...")
+
+        def retry_worker():
+            max_retries = 15       # 最多重发 15 次
+            interval = 0.2         # 每 200ms 一发
+            for i in range(max_retries):
+                if self.shared_data.save_flash_ack_received:
+                    status = self.shared_data.save_flash_status
+                    if status == 0:
+                        print(f"Flash save 成功! (status={status})")
+                    else:
+                        print(f"Flash save 失败: 飞控返回错误码 status={status}")
+                    self.shared_data.finish_save_flash_ack()
+                    return
+                # 发出请求帧（由发送线程的 encode_data 检测 pending 标志）
+                self.shared_data.request_save_to_flash()
+                time.sleep(interval)
+
+            # 超时
+            print("Flash save 超时: 未收到飞控 ACK")
+            self.shared_data.finish_save_flash_ack()
+
+        t = threading.Thread(target=retry_worker, daemon=True)
+        t.start()
 
     def _start_auto_tune(self):
         """启动一键自动调参（舵机 + 前馈）。"""
@@ -289,6 +351,46 @@ class PlayerInput:
                 self.auto_tuner.apply_pid_from_file()
             except Exception as e:
                 print(f"PID自动调参执行失败: {e}")
+            finally:
+                self.auto_tuning = False
+
+        self.auto_tune_thread = threading.Thread(target=worker)
+        self.auto_tune_thread.daemon = True
+        self.auto_tune_thread.start()
+
+    def _start_jacobian_auto_tune(self):
+        """启动一键自动调参（Jacobian）。"""
+        if self.auto_tuning:
+            print("自动调参已在进行中，忽略重复触发")
+            return
+
+        self.auto_tuning = True
+
+        def worker():
+            try:
+                self.auto_tuner.apply_jacobian_from_file()
+            except Exception as e:
+                print(f"Jacobian自动调参执行失败: {e}")
+            finally:
+                self.auto_tuning = False
+
+        self.auto_tune_thread = threading.Thread(target=worker)
+        self.auto_tune_thread.daemon = True
+        self.auto_tune_thread.start()
+
+    def _start_surface_limit_auto_tune(self):
+        """启动一键自动调参（翼面限幅+pitch前馈）。"""
+        if self.auto_tuning:
+            print("自动调参已在进行中，忽略重复触发")
+            return
+
+        self.auto_tuning = True
+
+        def worker():
+            try:
+                self.auto_tuner.apply_surface_limit_from_file()
+            except Exception as e:
+                print(f"翼面限幅自动调参执行失败: {e}")
             finally:
                 self.auto_tuning = False
 
@@ -599,6 +701,48 @@ class PlayerInput:
         for i in range(len(self.shared_data.jacobian_matrix)):
             for j in range(len(self.shared_data.jacobian_matrix[0])):
                 self.shared_data.jacobian_matrix[i][j] = float(self.last_tuned_jacobian[i][j])
+
+    def _load_last_tuned_surface_limit(self):
+        """加载上次翼面限幅调参结果"""
+        try:
+            if not self.surface_limit_persist_file.exists():
+                return
+
+            data = json.loads(self.surface_limit_persist_file.read_text(encoding='utf-8'))
+            min_d = data.get("surface_angle_min_d")
+            max_d = data.get("surface_angle_max_d")
+            pitch = data.get("pitch_need")
+            if isinstance(min_d, list) and len(min_d) == 4:
+                self.last_tuned_surface_limit["surface_angle_min_d"] = [float(v) for v in min_d]
+            if isinstance(max_d, list) and len(max_d) == 4:
+                self.last_tuned_surface_limit["surface_angle_max_d"] = [float(v) for v in max_d]
+            if pitch is not None:
+                self.last_tuned_surface_limit["pitch_need"] = float(pitch)
+            print(f"已加载翼面限幅记忆参数")
+        except Exception as e:
+            print(f"加载翼面限幅记忆参数失败: {e}")
+
+    def _save_last_tuned_surface_limit(self):
+        """保存翼面限幅调参结果"""
+        try:
+            payload = {
+                "surface_angle_min_d": [float(v) for v in self.last_tuned_surface_limit["surface_angle_min_d"]],
+                "surface_angle_max_d": [float(v) for v in self.last_tuned_surface_limit["surface_angle_max_d"]],
+                "pitch_need": float(self.last_tuned_surface_limit["pitch_need"]),
+                "saved_at": time.time(),
+            }
+            self.surface_limit_persist_file.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+        except Exception as e:
+            print(f"保存翼面限幅记忆参数失败: {e}")
+
+    def _apply_last_tuned_surface_limit(self):
+        """将记忆值应用到当前翼面限幅参数（进入翼面限幅调参时调用）"""
+        self.shared_data.surface_angle_min_d = list(self.last_tuned_surface_limit["surface_angle_min_d"])
+        self.shared_data.surface_angle_max_d = list(self.last_tuned_surface_limit["surface_angle_max_d"])
+        self.shared_data.pitch_need = float(self.last_tuned_surface_limit["pitch_need"])
     
     def _on_navigation_changed(self, nav_row: int, nav_col: int):
         """
@@ -669,6 +813,23 @@ class PlayerInput:
                         self.shared_data.feedforward_values[servo_index] = value
                         self.last_tuned_feedforward = self.shared_data.feedforward_values.copy()
                         self._save_last_tuned_feedforward()
+                        return True
+                elif self.shared_data.sub_state == SubState.SURFACE_LIMIT:
+                    col = self.shared_data.nav_col
+                    if 0 <= col < 4:
+                        self.shared_data.surface_angle_min_d[col] = value
+                        self.last_tuned_surface_limit["surface_angle_min_d"] = list(self.shared_data.surface_angle_min_d)
+                        self._save_last_tuned_surface_limit()
+                        return True
+                    elif 4 <= col < 8:
+                        self.shared_data.surface_angle_max_d[col - 4] = value
+                        self.last_tuned_surface_limit["surface_angle_max_d"] = list(self.shared_data.surface_angle_max_d)
+                        self._save_last_tuned_surface_limit()
+                        return True
+                    elif col == 8:
+                        self.shared_data.pitch_need = value
+                        self.last_tuned_surface_limit["pitch_need"] = float(self.shared_data.pitch_need)
+                        self._save_last_tuned_surface_limit()
                         return True
             else:
                 # 在AUTO或TOWER模式下更新参数

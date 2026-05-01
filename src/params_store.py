@@ -20,6 +20,7 @@ PARAM_FILES = {
     "feedforward_values": ROOT_DIR / "feedforward_params.json",
     "pid_param": ROOT_DIR / "pid_params.json",
     "jacobian_matrix": ROOT_DIR / "jacobian_params.json",
+    "surface_limit": ROOT_DIR / "surface_limit_params.json",
 }
 
 
@@ -72,6 +73,18 @@ def load_params() -> Dict[str, Any]:
     if jacobian is not None:
         payload["jacobian_matrix"] = jacobian
 
+    surface_data = _read_json(PARAM_FILES["surface_limit"])
+    surface_min = _float_list(surface_data.get("surface_angle_min_d"), 4)
+    surface_max = _float_list(surface_data.get("surface_angle_max_d"), 4)
+    if surface_min is not None:
+        payload["surface_angle_min_d"] = surface_min
+    if surface_max is not None:
+        payload["surface_angle_max_d"] = surface_max
+    try:
+        payload["pitch_need"] = float(surface_data.get("pitch_need", 0.0))
+    except (TypeError, ValueError):
+        pass
+
     return payload
 
 
@@ -85,6 +98,12 @@ def apply_params(shared_data: Any, params: Dict[str, Any]) -> Dict[str, Any]:
             shared_data.pid_param = [list(row) for row in params["pid_param"]]
         if "jacobian_matrix" in params:
             shared_data.jacobian_matrix = [list(row) for row in params["jacobian_matrix"]]
+        if "surface_angle_min_d" in params:
+            shared_data.surface_angle_min_d = list(params["surface_angle_min_d"])
+        if "surface_angle_max_d" in params:
+            shared_data.surface_angle_max_d = list(params["surface_angle_max_d"])
+        if "pitch_need" in params:
+            shared_data.pitch_need = float(params["pitch_need"])
     return params
 
 
@@ -99,6 +118,9 @@ def snapshot_params(shared_data: Any) -> Dict[str, Any]:
             "feedforward_values": list(shared_data.feedforward_values),
             "pid_param": [list(row) for row in shared_data.pid_param],
             "jacobian_matrix": [list(row) for row in shared_data.jacobian_matrix],
+            "surface_angle_min_d": list(shared_data.surface_angle_min_d),
+            "surface_angle_max_d": list(shared_data.surface_angle_max_d),
+            "pitch_need": float(shared_data.pitch_need),
         }
 
 
@@ -120,6 +142,19 @@ def save_from(shared_data: Any) -> Dict[str, Any]:
     )
     PARAM_FILES["jacobian_matrix"].write_text(
         json.dumps({"jacobian_matrix": params["jacobian_matrix"], "saved_at": saved_at}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    PARAM_FILES["surface_limit"].write_text(
+        json.dumps(
+            {
+                "surface_angle_min_d": params["surface_angle_min_d"],
+                "surface_angle_max_d": params["surface_angle_max_d"],
+                "pitch_need": params["pitch_need"],
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 

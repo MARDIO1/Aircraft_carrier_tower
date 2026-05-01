@@ -7,52 +7,32 @@ async function snapshot(request: any) {
   return response.json();
 }
 
-async function clickButton(page: any, name: string) {
-  await page.getByRole("button", { name, exact: true }).evaluate((button: HTMLElement) => {
-    (button as HTMLButtonElement).click();
-  });
-}
-
 async function setStateFromPage(page: any, state: string) {
-  const result = await page.evaluate(async (targetState: string) => {
-    const response = await fetch("http://127.0.0.1:8000/api/control", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ main_state: targetState }),
-    });
-    return {
-      ok: response.ok,
-      status: response.status,
-      body: await response.text(),
-    };
-  }, state);
-  expect(result.ok).toBeTruthy();
+  await page.getByRole("button", { name: state, exact: true }).click();
 }
 
-test("dashboard connects, changes states, and round-trips JSON params", async ({ page, request }) => {
+test("dashboard controls state and parameter JSON", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("连接与控制")).toBeVisible();
+  await expect(page.getByText("Ground Station Web")).toBeVisible();
 
-  await clickButton(page, "connect");
-  await expect.poll(async () => (await snapshot(request)).runtime.serial.com_port).not.toBeNull();
+  await page.getByRole("button", { name: "load json", exact: true }).click();
+  await expect.poll(async () => {
+    const snap = await snapshot(request);
+    return Array.isArray(snap.control.jacobian_matrix) && Array.isArray(snap.control.surface_angle_min_d);
+  }).toBeTruthy();
 
-  await setStateFromPage(page, "STOP");
-  for (const state of ["AUTO", "TOWER", "STOP"]) {
+  for (const state of ["STOP", "TOWER", "AUTO", "TUNING", "DATA"]) {
     await setStateFromPage(page, state);
     await expect.poll(async () => (await snapshot(request)).state.main).toBe(state);
   }
 
-  await clickButton(page, "load json");
-  await expect.poll(async () => {
-    const response = await request.get("http://127.0.0.1:8000/api/params");
-    const body = await response.json();
-    return Array.isArray(body.params.pid_param) && Array.isArray(body.params.jacobian_matrix);
-  }).toBeTruthy();
+  await page.getByRole("button", { name: "apply jacobian", exact: true }).click();
+  await page.getByRole("button", { name: "apply surface limit", exact: true }).click();
+  await page.getByRole("button", { name: "save json", exact: true }).click();
 
-  await clickButton(page, "save json");
-  const saved = JSON.parse(readFileSync("../pid_params.json", "utf-8"));
-  expect(typeof saved.saved_at).toBe("number");
-  expect(Array.isArray(saved.pid_param)).toBeTruthy();
+  const pidSaved = JSON.parse(readFileSync("../pid_params.json", "utf-8"));
+  const surfaceSaved = JSON.parse(readFileSync("../surface_limit_params.json", "utf-8"));
+  expect(typeof pidSaved.saved_at).toBe("number");
+  expect(typeof surfaceSaved.saved_at).toBe("number");
+  expect(Array.isArray(surfaceSaved.surface_angle_min_d)).toBeTruthy();
 });

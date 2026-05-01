@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type Snapshot = Record<string, any>;
+type PortInfo = { device: string; description: string; hwid?: string };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const WS_BASE = API_BASE.replace(/^http/, "ws");
-
-const mainStateOrder = ["STOP", "TOWER", "AUTO", "TUNING", "DATA"] as const;
+const MAIN_STATES = ["STOP", "TOWER", "AUTO", "TUNING", "DATA"] as const;
+const PID_LABELS = ["att roll", "att pitch", "att yaw", "rate roll", "rate pitch", "rate yaw", "aux"];
+const PID_COLS = ["kp", "ki", "kd", "pmax", "out max", "out min"];
+const JACOBIAN_ROWS = ["L roll", "M pitch", "N yaw"];
+const SURFACE_LABELS = ["surface 1", "surface 2", "surface 3", "surface 4"];
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
@@ -21,7 +25,7 @@ async function readJson(path: string, init?: RequestInit) {
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
   } catch {
-    throw new Error(`Cannot reach backend ${API_BASE}`);
+    throw new Error(`backend offline: ${API_BASE}`);
   }
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};
@@ -29,420 +33,432 @@ async function readJson(path: string, init?: RequestInit) {
   return body;
 }
 
-function makeMatrix<T>(rows: number, cols: number, value: T): T[][] {
+function makeMatrix(rows: number, cols: number, value = 0) {
   return Array.from({ length: rows }, () => Array.from({ length: cols }, () => value));
 }
 
-function applySnapshotToForm(data: Snapshot) {
+function nums(values: unknown, length: number) {
+  const arr = Array.isArray(values) ? values : [];
+  return Array.from({ length }, (_, index) => Number(arr[index] ?? 0));
+}
+
+function matrix(values: unknown, rows: number, cols: number) {
+  const arr = Array.isArray(values) ? values : [];
+  return Array.from({ length: rows }, (_, row) => nums(arr[row], cols));
+}
+
+function formFromSnapshot(snapshot: Snapshot | null) {
+  const control = snapshot?.control ?? {};
   return {
-    fanSpeed: Number(data.control?.fan_speed ?? 0),
-    mainSwitch: Number(data.control?.main_switch ?? 0),
-    servoAngles: [...(data.control?.servo_angles ?? [0, 0, 0, 0])].map(Number),
-    feedforwardValues: [...(data.control?.feedforward_values ?? [0, 0, 0, 0])].map(Number),
-    pidParam: (data.control?.pid_param ?? makeMatrix(7, 6, 0)).map((row: number[]) => row.map(Number)),
-    jacobianMatrix: (data.control?.jacobian_matrix ?? makeMatrix(3, 4, 0)).map((row: number[]) => row.map(Number)),
+    fanSpeed: Number(control.fan_speed ?? 0),
+    servoAngles: nums(control.servo_angles, 4),
+    feedforwardValues: nums(control.feedforward_values, 4),
+    pidParam: matrix(control.pid_param, 7, 6),
+    jacobianMatrix: matrix(control.jacobian_matrix, 3, 4),
+    surfaceMin: nums(control.surface_angle_min_d, 4),
+    surfaceMax: nums(control.surface_angle_max_d, 4),
+    pitchNeed: Number(control.pitch_need ?? 0),
   };
 }
 
 export default function Page() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [status, setStatus] = useState("connecting...");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [ports, setPorts] = useState<{ device: string; description: string }[]>([]);
-  const [selectedPort, setSelectedPort] = useState("CH340");
+  const [busy, setBusy] = useState("");
+  const [ports, setPorts] = useState<PortInfo[]>([]);
+  const [selectedPort, setSelectedPort] = useState("AUTO_CH340");
+  const [flashResult, setFlashResult] = useState("idle");
+  const [autoTuneStatus, setAutoTuneStatus] = useState("idle");
 
-  // 参数表单
-  const [fanSpeed, setFanSpeed] = useState(0);
-  const [motorPwm, setMotorPwm] = useState(1500);
-  const [motorStep, setMotorStep] = useState(1000);
-  const [mainSwitch, setMainSwitch] = useState(0);
-  const [servoAngles, setServoAngles] = useState<number[]>([0, 0, 0, 0]);
-  const [feedforwardValues, setFeedforwardValues] = useState<number[]>([0, 0, 0, 0]);
-  const [pidParam, setPidParam] = useState<number[][]>(makeMatrix(7, 6, 0));
-  const [jacobianMatrix, setJacobianMatrix] = useState<number[][]>(makeMatrix(3, 4, 0));
-
+  const initial = formFromSnapshot(null);
+  const [fanSpeed, setFanSpeed] = useState(initial.fanSpeed);
+  const [servoAngles, setServoAngles] = useState(initial.servoAngles);
+  const [feedforwardValues, setFeedforwardValues] = useState(initial.feedforwardValues);
+  const [pidParam, setPidParam] = useState(initial.pidParam);
+  const [jacobianMatrix, setJacobianMatrix] = useState(initial.jacobianMatrix);
+  const [surfaceMin, setSurfaceMin] = useState(initial.surfaceMin);
+  const [surfaceMax, setSurfaceMax] = useState(initial.surfaceMax);
+  const [pitchNeed, setPitchNeed] = useState(initial.pitchNeed);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // 初始快照
+  function applyForm(next: Snapshot | null) {
+    const form = formFromSnapshot(next);
+    setFanSpeed(form.fanSpeed);
+    setServoAngles(form.servoAngles);
+    setFeedforwardValues(form.feedforwardValues);
+    setPidParam(form.pidParam);
+    setJacobianMatrix(form.jacobianMatrix);
+    setSurfaceMin(form.surfaceMin);
+    setSurfaceMax(form.surfaceMax);
+    setPitchNeed(form.pitchNeed);
+  }
+
   useEffect(() => {
-    (async () => {
-      try {
-        const snap = await readJson("/api/snapshot");
-        setSnapshot(snap);
-        const form = applySnapshotToForm(snap);
-        setFanSpeed(form.fanSpeed);
-        setMainSwitch(form.mainSwitch);
-        setServoAngles(form.servoAngles);
-        setFeedforwardValues(form.feedforwardValues);
-        setMotorPwm(form.fanSpeed ?? 1500);
-        setPidParam(form.pidParam);
-        setJacobianMatrix(form.jacobianMatrix);
+    readJson("/api/snapshot")
+      .then((data) => {
+        setSnapshot(data);
+        applyForm(data);
         setStatus("ready");
-      } catch (e) {
-        setStatus(`offline: ${(e as Error).message}`);
-      }
-    })();
-    (async () => {
-      try {
-        const data = await readJson("/api/ports");
-        setPorts(data.ports ?? []);
-      } catch {}
-    })();
+      })
+      .catch((error: Error) => setStatus(error.message));
+
+    readJson("/api/ports")
+      .then((data) => setPorts(data.ports ?? []))
+      .catch(() => undefined);
   }, []);
 
-  // WebSocket 高频更新 hex + 状态
   useEffect(() => {
     const socket = new WebSocket(`${WS_BASE}/ws`);
     wsRef.current = socket;
     socket.onopen = () => setStatus("live");
-    socket.onclose = () => setStatus("disconnected");
-    socket.onerror = () => setStatus("socket error");
+    socket.onclose = () => setStatus("ws closed");
+    socket.onerror = () => setStatus("ws error");
     socket.onmessage = (event) => {
       try {
         setSnapshot(JSON.parse(event.data));
-      } catch {}
+      } catch {
+        // Ignore one bad frame instead of freezing controls.
+      }
     };
     return () => socket.close();
   }, []);
 
-  const patchControl = useCallback(
-    async (payload: Record<string, unknown>) => {
-      setBusy(Object.keys(payload)[0] ?? "update");
-      try {
-        const data = await readJson("/api/control", { method: "POST", body: JSON.stringify(payload) });
-        setSnapshot(data);
-        if (data.control) {
-          const form = applySnapshotToForm(data);
-          setFanSpeed(form.fanSpeed);
-          setMainSwitch(form.mainSwitch);
-          setServoAngles(form.servoAngles);
-          setFeedforwardValues(form.feedforwardValues);
-          setPidParam(form.pidParam);
-          setJacobianMatrix(form.jacobianMatrix);
-        }
-      } catch (e) {
-        setStatus((e as Error).message);
-      } finally {
-        setBusy(null);
-      }
-    },
-    []
-  );
-
-  const connect = async () => {
-    setBusy("connect");
+  async function runAction(name: string, action: () => Promise<void>) {
+    setBusy(name);
     try {
-      const data = await readJson("/api/connect", {
-        method: "POST",
-        body: JSON.stringify({ com_port: selectedPort === "CH340" ? null : selectedPort, auto_keyword: "CH340" }),
-      });
-      setSnapshot((prev) => ({ ...(prev ?? {}), runtime: { ...(prev?.runtime ?? {}), serial: data } }));
-      setStatus(data.connected ? `connected ${data.com_port ?? ""}` : `connect failed ${data.error ?? ""}`);
-    } catch (e) {
-      setStatus((e as Error).message);
+      await action();
+    } catch (error) {
+      setStatus((error as Error).message);
     } finally {
-      setBusy(null);
+      setBusy("");
     }
-  };
+  }
 
-  const disconnect = async () => {
-    setBusy("disconnect");
-    try {
-      const data = await readJson("/api/disconnect", { method: "POST", body: "{}" });
-      setSnapshot((prev) => ({ ...(prev ?? {}), runtime: { ...(prev?.runtime ?? {}), serial: data } }));
-      setStatus("disconnected");
-    } catch (e) {
-      setStatus((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
+  async function patchControl(payload: Record<string, unknown>, syncForm = false) {
+    const data = await readJson("/api/control", { method: "POST", body: JSON.stringify(payload) });
+    setSnapshot(data);
+    if (syncForm) applyForm(data);
+  }
 
-  const loadJsonParams = async () => {
-    setBusy("load-json");
-    try {
-      const data = await readJson("/api/params/load", { method: "POST", body: "{}" });
-      setSnapshot(data.snapshot);
-      const form = applySnapshotToForm(data.snapshot);
-      setFanSpeed(form.fanSpeed);
-      setMainSwitch(form.mainSwitch);
-      setServoAngles(form.servoAngles);
-      setFeedforwardValues(form.feedforwardValues);
-      setPidParam(form.pidParam);
-      setJacobianMatrix(form.jacobianMatrix);
-      setStatus("json loaded");
-    } catch (e) {
-      setStatus((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const saveJsonParams = async () => {
-    setBusy("save-json");
-    try {
-      await readJson("/api/params/save", { method: "POST", body: "{}" });
-      setStatus("json saved");
-    } catch (e) {
-      setStatus((e as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const stateMain = snapshot?.state?.main ?? "STOP";
-  const txHex = snapshot?.runtime?.send?.hex ?? "";
-  const rxHex = snapshot?.runtime?.receive?.last_rx_hex ?? "";
-  const rxCount = snapshot?.runtime?.receive?.receive_count ?? 0;
-  const rxErrors = snapshot?.runtime?.receive?.error_count ?? 0;
-  const csvLogging = snapshot?.runtime?.receive?.blackbox_logging?.is_logging ?? false;
-  const csvCount = snapshot?.runtime?.receive?.blackbox_logging?.record_count ?? 0;
-  const serialConnected = snapshot?.runtime?.serial?.connected ?? false;
-  const comPort = snapshot?.runtime?.serial?.com_port ?? "none";
+  const serial = snapshot?.runtime?.serial ?? {};
+  const receive = snapshot?.runtime?.receive ?? {};
+  const send = snapshot?.runtime?.send ?? {};
+  const analysis = snapshot?.runtime?.analysis ?? {};
+  const mainState = snapshot?.state?.main ?? "STOP";
+  const connected = Boolean(serial.connected);
+  const blackbox = receive.blackbox_logging ?? {};
+  const rxCount = Number(receive.receive_count ?? 0);
+  const csvCount = Number(blackbox.record_count ?? 0);
 
   return (
     <main className="shell">
-      {/* ========== 第1段: 连接区 ========== */}
       <section className="panel">
-        <div className="panel-title">连接与控制</div>
-        <div className="connect-bar">
-          <div className="connect-left">
-            <label className="port-label">
-              <span>COM</span>
-              <select
-                value={selectedPort}
-                onChange={(e) => setSelectedPort(e.target.value)}
-                className="port-select"
-              >
-                <option value="CH340">auto CH340</option>
-                {ports.map((p) => (
-                  <option key={p.device} value={p.device}>
-                    {p.device} {p.description}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button onClick={connect} disabled={busy !== null || serialConnected}>
-              connect
-            </button>
-            <button onClick={disconnect} disabled={busy !== null || !serialConnected}>
-              disconnect
-            </button>
-          </div>
-          <div className="connect-right">
-            <button onClick={loadJsonParams} disabled={busy !== null}>
-              load json
-            </button>
-            <button onClick={saveJsonParams} disabled={busy !== null}>
-              save json
-            </button>
-          </div>
-        </div>
-        <div className="status-bar">
-          <span className={`status-dot ${serialConnected ? "on" : "off"}`} />
-          <span>{status}</span>
-          <span className="status-sep">|</span>
-          <span>COM: {comPort}</span>
-          <span className="status-sep">|</span>
-          <span>RX: {rxCount}</span>
-          <span className="status-sep">|</span>
-          <span>CSV: {csvLogging ? `recording ${csvCount}` : "idle"}</span>
+        <h1>Ground Station Web</h1>
+        <div className="meta">
+          <span>status: {status}</span>
+          <span>serial: {serial.com_port ?? "none"}</span>
+          <span>rx: {rxCount}</span>
+          <span>csv: {blackbox.is_logging ? `recording ${csvCount}` : "idle"}</span>
+          <span>busy: {busy || "none"}</span>
         </div>
       </section>
 
-      {/* ========== 第2段: 状态按钮 ========== */}
       <section className="panel">
-        <div className="chip-row">
-          {mainStateOrder.map((item) => {
-            const isActive = item === stateMain;
-            const isData = item === "DATA";
-            let disabled = busy !== null;
-            // DATA 按钮特殊处理：先切 STOP 再切 DATA
-            const label = isData && !isActive && stateMain !== "STOP" ? "STOP→DATA" : item;
-            return (
-              <button
-                key={item}
-                className={isActive ? "chip active" : "chip"}
-                disabled={disabled}
-                onClick={async () => {
-                  if (isData && stateMain !== "STOP") {
-                    await patchControl({ main_state: "STOP" });
-                    await new Promise((r) => setTimeout(r, 200));
-                  }
-                  patchControl({ main_state: item });
-                }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* ========== 电机 PWM 脉冲 (int16, 0-10000) ========== */}
-      <section className="panel">
-        <div className="panel-title">电机 PWM 脉冲 (int16)</div>
-        <div className="matrix-grid single">
+        <h2>1. USB TTL / JSON</h2>
+        <div className="toolbar">
           <label>
-            <span>motor</span>
-            <input
-              type="number"
-              step={motorStep}
-              min={0}
-              max={10000}
-              value={motorPwm}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (!isNaN(v)) setMotorPwm(Math.max(0, Math.min(10000, v)));
-              }}
-            />
-          </label>
-        </div>
-        <div className="matrix-grid single" style={{ marginTop: 6 }}>
-          <label>
-            <span>step</span>
-            <input
-              type="number"
-              step={1}
-              min={1}
-              max={1000}
-              value={motorStep}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (!isNaN(v)) setMotorStep(Math.max(1, Math.min(1000, v)));
-              }}
-            />
-          </label>
-        </div>
-        <button onClick={() => patchControl({ fan_speed: motorPwm })} disabled={busy !== null}>
-          apply motor pwm
-        </button>
-      </section>
-
-      {/* ========== 第3段: 收发原始 hex 监控 ========== */}
-      <section className="grid two-col">
-        <article className="panel hex-panel">
-          <div className="panel-title">TX 发送原始数据 (HEX)</div>
-          <pre className="hex-display">{txHex || "等待发送..."}</pre>
-        </article>
-        <article className="panel hex-panel">
-          <div className="panel-title">RX 接收原始数据 (HEX) — {rxCount} frames, {rxErrors} errors</div>
-          <pre className="hex-display">{rxHex || "等待接收..."}</pre>
-        </article>
-      </section>
-
-      {/* ========== 第4段: 参数调节 ========== */}
-      <section className="panel">
-        <div className="panel-title">舵面 / 前馈</div>
-        <div className="matrix-grid four">
-          {servoAngles.map((value, index) => (
-            <label key={`s${index}`}>
-              <span>{`servo ${index + 1}`}</span>
-              <input
-                type="number"
-                step="0.1"
-                value={value}
-                onChange={(e) => {
-                  const next = [...servoAngles];
-                  next[index] = Number(e.target.value);
-                  setServoAngles(next);
-                }}
-              />
-            </label>
-          ))}
-        </div>
-        <button onClick={() => patchControl({ servo_angles: servoAngles })} disabled={busy !== null}>
-          apply servo
-        </button>
-        <div style={{ height: 12 }} />
-        <div className="matrix-grid four">
-          {feedforwardValues.map((value, index) => (
-            <label key={`ff${index}`}>
-              <span>{`ff ${index + 1}`}</span>
-              <input
-                type="number"
-                step="0.1"
-                value={value}
-                onChange={(e) => {
-                  const next = [...feedforwardValues];
-                  next[index] = Number(e.target.value);
-                  setFeedforwardValues(next);
-                }}
-              />
-            </label>
-          ))}
-        </div>
-        <button onClick={() => patchControl({ feedforward_values: feedforwardValues })} disabled={busy !== null}>
-          apply feedforward
-        </button>
-      </section>
-
-      <section className="panel">
-        <div className="panel-title">PID Matrix</div>
-        <div className="pid-grid">
-          {pidParam.map((row, r) => (
-            <div key={r} className="pid-row">
-              {row.map((value, c) => (
-                <input
-                  key={`${r}-${c}`}
-                  type="number"
-                  step="0.01"
-                  value={value}
-                  onChange={(e) => {
-                    const next = pidParam.map((items) => [...items]);
-                    next[r][c] = Number(e.target.value);
-                    setPidParam(next);
-                  }}
-                />
+            <span>COM port</span>
+            <select value={selectedPort} onChange={(event) => setSelectedPort(event.target.value)}>
+              <option value="AUTO_CH340">auto CH340</option>
+              {ports.map((port) => (
+                <option key={port.device} value={port.device}>
+                  {port.device} {port.description}
+                </option>
               ))}
-            </div>
-          ))}
+            </select>
+          </label>
+          <button
+            onClick={() =>
+              runAction("connect", async () => {
+                const data = await readJson("/api/connect", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    com_port: selectedPort === "AUTO_CH340" ? null : selectedPort,
+                    auto_keyword: "CH340",
+                  }),
+                });
+                setStatus(data.connected ? `connected ${data.com_port}` : `connect failed: ${data.error ?? "unknown"}`);
+              })
+            }
+          >
+            connect
+          </button>
+          <button
+            onClick={() =>
+              runAction("disconnect", async () => {
+                await readJson("/api/disconnect", { method: "POST", body: "{}" });
+                setStatus("disconnected");
+              })
+            }
+          >
+            disconnect
+          </button>
+          <button
+            onClick={() =>
+              runAction("load json", async () => {
+                const data = await readJson("/api/params/load", { method: "POST", body: "{}" });
+                setSnapshot(data.snapshot);
+                applyForm(data.snapshot);
+                setStatus("json loaded");
+              })
+            }
+          >
+            load json
+          </button>
+          <button
+            onClick={() =>
+              runAction("save json", async () => {
+                await readJson("/api/params/save", { method: "POST", body: "{}" });
+                setStatus("json saved");
+              })
+            }
+          >
+            save json
+          </button>
         </div>
-        <button onClick={() => patchControl({ pid_param: pidParam })} disabled={busy !== null}>
-          apply pid
-        </button>
       </section>
 
       <section className="panel">
-        <div className="panel-title">Jacobian Matrix</div>
-        <div className="pid-grid jacobian">
-          {jacobianMatrix.map((row, r) => (
-            <div key={r} className="pid-row">
-              {row.map((value, c) => (
-                <input
-                  key={`${r}-${c}`}
-                  type="number"
-                  step="0.01"
-                  value={value}
-                  onChange={(e) => {
-                    const next = jacobianMatrix.map((items) => [...items]);
-                    next[r][c] = Number(e.target.value);
-                    setJacobianMatrix(next);
-                  }}
-                />
-              ))}
-            </div>
+        <h2>2. State</h2>
+        <div className="state-row">
+          {MAIN_STATES.map((state) => (
+            <button
+              key={state}
+              className={state === mainState ? "active" : ""}
+              onClick={() => runAction(`state ${state}`, () => patchControl({ main_state: state }))}
+            >
+              {state}
+            </button>
           ))}
         </div>
-        <button onClick={() => patchControl({ jacobian_matrix: jacobianMatrix })} disabled={busy !== null}>
-          apply jacobian
-        </button>
+        <div className="toolbar compact">
+          <button
+            onClick={() =>
+              runAction("flash", async () => {
+                const data = await readJson("/api/flash/save", { method: "POST", body: "{}" });
+                setFlashResult(data.ok ? `ok status=${data.status}` : data.error ?? `fail status=${data.status}`);
+                setSnapshot(data.snapshot);
+              })
+            }
+          >
+            save flash
+          </button>
+          <button onClick={() => runAction("auto jacobian", () => startAutoTune("jacobian"))}>auto jacobian</button>
+          <button onClick={() => runAction("auto surface", () => startAutoTune("surface_limit"))}>auto surface</button>
+          <button onClick={() => runAction("auto all", () => startAutoTune("all"))}>auto all</button>
+          <span>flash: {flashResult}</span>
+          <span>tune: {autoTuneStatus}</span>
+        </div>
       </section>
 
-      {/* 折叠区: 分析报告 */}
       <section className="panel">
-        <details>
-          <summary className="panel-title" style={{ cursor: "pointer", display: "inline" }}>
-            Analysis Reports (折叠)
-          </summary>
-          <div className="stack" style={{ marginTop: 10 }}>
-            <div>last: {snapshot?.runtime?.analysis?.last_report_path ?? "none"}</div>
-            <pre className="code-block">
-              {JSON.stringify(snapshot?.runtime?.analysis ?? {}, null, 2)}
-            </pre>
+        <h2>3. Raw HEX</h2>
+        <div className="hex-line">
+          <strong>TX</strong>
+          <code>{send.hex ?? "no tx frame"}</code>
+        </div>
+        <div className="hex-line">
+          <strong>RX</strong>
+          <code>{receive.last_rx_hex ?? "no rx frame"}</code>
+        </div>
+        <div className="meta">
+          <span>last rx: {receive.last_receive_time ?? "never"}</span>
+          <span>errors: {receive.error_count ?? 0}</span>
+          <span>blackbox received: {snapshot?.blackbox?.received ? "yes" : "no"}</span>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>4. Parameters</h2>
+        <div className="param-block">
+          <h3>Motor / Servo / Feedforward</h3>
+          <div className="grid four">
+            <NumberField label="fan speed" value={fanSpeed} onChange={setFanSpeed} />
+            {servoAngles.map((value, index) => (
+              <NumberField
+                key={`servo-${index}`}
+                label={`servo ${index + 1}`}
+                value={value}
+                onChange={(next) => setServoAngles(replaceAt(servoAngles, index, next))}
+              />
+            ))}
+            {feedforwardValues.map((value, index) => (
+              <NumberField
+                key={`ff-${index}`}
+                label={`ff ${index + 1}`}
+                value={value}
+                onChange={(next) => setFeedforwardValues(replaceAt(feedforwardValues, index, next))}
+              />
+            ))}
           </div>
-        </details>
+          <div className="toolbar compact">
+            <button onClick={() => runAction("apply fan", () => patchControl({ fan_speed: fanSpeed }))}>apply fan</button>
+            <button onClick={() => runAction("apply servo", () => patchControl({ servo_angles: servoAngles }))}>apply servo</button>
+            <button onClick={() => runAction("apply ff", () => patchControl({ feedforward_values: feedforwardValues }))}>apply feedforward</button>
+          </div>
+        </div>
+
+        <div className="param-block">
+          <h3>PID</h3>
+          <MatrixTable
+            rowLabels={PID_LABELS}
+            colLabels={PID_COLS}
+            values={pidParam}
+            onChange={(row, col, value) => setPidParam(replaceMatrix(pidParam, row, col, value))}
+          />
+          <button onClick={() => runAction("apply pid", () => patchControl({ pid_param: pidParam }))}>apply pid</button>
+        </div>
+
+        <div className="param-block">
+          <h3>Jacobian 3x4</h3>
+          <MatrixTable
+            rowLabels={JACOBIAN_ROWS}
+            colLabels={SURFACE_LABELS}
+            values={jacobianMatrix}
+            onChange={(row, col, value) => setJacobianMatrix(replaceMatrix(jacobianMatrix, row, col, value))}
+          />
+          <button onClick={() => runAction("apply jacobian", () => patchControl({ jacobian_matrix: jacobianMatrix }))}>
+            apply jacobian
+          </button>
+        </div>
+
+        <div className="param-block">
+          <h3>Surface Limit</h3>
+          <div className="grid four">
+            {surfaceMin.map((value, index) => (
+              <NumberField
+                key={`min-${index}`}
+                label={`min ${index + 1}`}
+                value={value}
+                onChange={(next) => setSurfaceMin(replaceAt(surfaceMin, index, next))}
+              />
+            ))}
+            {surfaceMax.map((value, index) => (
+              <NumberField
+                key={`max-${index}`}
+                label={`max ${index + 1}`}
+                value={value}
+                onChange={(next) => setSurfaceMax(replaceAt(surfaceMax, index, next))}
+              />
+            ))}
+            <NumberField label="pitch need" value={pitchNeed} onChange={setPitchNeed} />
+          </div>
+          <button
+            onClick={() =>
+              runAction("apply surface", () =>
+                patchControl({
+                  surface_angle_min_d: surfaceMin,
+                  surface_angle_max_d: surfaceMax,
+                  pitch_need: pitchNeed,
+                })
+              )
+            }
+          >
+            apply surface limit
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>5. Analysis / Feishu</h2>
+        <div className="toolbar compact">
+          <button
+            onClick={() =>
+              runAction("analysis", async () => {
+                const data = await readJson("/api/analysis/run", { method: "POST", body: JSON.stringify({}) });
+                setStatus(`analysis report: ${data.report_path ?? "done"}`);
+              })
+            }
+          >
+            run analysis
+          </button>
+          <button
+            onClick={() =>
+              runAction("feishu", async () => {
+                const data = await readJson("/api/feishu/research");
+                setStatus(`feishu connector: ${data.available_connector ? "available" : "local draft only"}`);
+              })
+            }
+          >
+            feishu status
+          </button>
+          <span>last report: {analysis.last_report_path ?? "none"}</span>
+          <span>last error: {analysis.last_error ?? "none"}</span>
+        </div>
       </section>
     </main>
   );
+
+  async function startAutoTune(mode: string) {
+    const data = await readJson(`/api/auto-tune?mode=${mode}`, { method: "POST", body: "{}" });
+    setAutoTuneStatus(data.ok ? `${mode} started` : data.error ?? "failed");
+  }
+}
+
+function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label>
+      <span>{label}</span>
+      <input type="number" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    </label>
+  );
+}
+
+function MatrixTable({
+  rowLabels,
+  colLabels,
+  values,
+  onChange,
+}: {
+  rowLabels: string[];
+  colLabels: string[];
+  values: number[][];
+  onChange: (row: number, col: number, value: number) => void;
+}) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th />
+            {colLabels.map((label) => (
+              <th key={label}>{label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {values.map((row, rowIndex) => (
+            <tr key={rowIndex}>
+              <th>{rowLabels[rowIndex] ?? `row ${rowIndex + 1}`}</th>
+              {row.map((value, colIndex) => (
+                <td key={`${rowIndex}-${colIndex}`}>
+                  <input type="number" step="0.01" value={value} onChange={(event) => onChange(rowIndex, colIndex, Number(event.target.value))} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function replaceAt(values: number[], index: number, value: number) {
+  const next = [...values];
+  next[index] = value;
+  return next;
+}
+
+function replaceMatrix(values: number[][], row: number, col: number, value: number) {
+  return values.map((items, rowIndex) => (rowIndex === row ? replaceAt(items, col, value) : items));
 }

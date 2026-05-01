@@ -54,6 +54,9 @@ def protocol_snapshot(shared_data: Any) -> Dict[str, Any]:
                 "pid_name": list(shared_data.pid_name),
                 "param_names": list(shared_data.param_names),
                 "jacobian_matrix": [list(row) for row in shared_data.jacobian_matrix],
+                "surface_angle_min_d": list(shared_data.surface_angle_min_d),
+                "surface_angle_max_d": list(shared_data.surface_angle_max_d),
+                "pitch_need": float(shared_data.pitch_need),
             },
             "blackbox": {
                 "received": shared_data.blackbox_received,

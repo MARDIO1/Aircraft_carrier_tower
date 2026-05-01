@@ -48,6 +48,7 @@ class SubState(Enum):
     PID = 0xA2       # PID调参
     JACOBIAN = 0xA3  # 雅可比矩阵调参
     FEEDFORWARD = 0xA4  # 前馈调参（与SERVO相同数据结构）
+    SURFACE_LIMIT = 0xA7  # 翼面限幅+pitch前馈调参
 
 # ==================== 状态转换验证 ====================
 
@@ -309,6 +310,38 @@ class JacobianEncoder(EncoderBase):
     def get_packet_length(self) -> int:
         return 1 + 1 + 3*4*4 + 1 +1  # 0xAA + 0xA3 + 12*float + 0xBB
 
+class SurfaceLimitEncoder(EncoderBase):
+    """翼面限幅+pitch前馈调参编码器
+
+    帧格式：0xAA + 0xA7 + float[4]min限幅 + float[4]max限幅 + float(pitch_need) + CRC8 + 0xBB
+    总计：1+1+16+16+4+1+1 = 40 字节
+    """
+
+    def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
+        """编码翼面限幅+pitch前馈调参数据"""
+        packet = bytearray()
+
+        packet.append(0xAA)  # START_BYTE
+        packet.append(0xA7)  # SURFACE_LIMIT 子状态标识
+
+        # min限幅 4个float
+        for val in data.surface_angle_min_d:
+            packet.extend(struct.pack('<f', float(val)))
+
+        # max限幅 4个float
+        for val in data.surface_angle_max_d:
+            packet.extend(struct.pack('<f', float(val)))
+
+        # pitch前馈 1个float
+        packet.extend(struct.pack('<f', float(data.pitch_need)))
+
+        packet.append(0xBB)  # END_BYTE
+        packet_with_crc = add_crc8_to_packet(packet, calc_start=0, calc_end=-1)
+        return packet_with_crc
+
+    def get_packet_length(self) -> int:
+        return 1 + 1 + 4*4 + 4*4 + 4 + 1 + 1  # = 40B
+
 # ==================== 编码器工厂 ====================
 
 def encode_save_to_flash() -> bytearray:
@@ -327,6 +360,7 @@ class EncoderFactory:
         SubState.FEEDFORWARD: FeedforwardEncoder(),
         SubState.PID: PIDEncoder(),
         SubState.JACOBIAN: JacobianEncoder(),
+        SubState.SURFACE_LIMIT: SurfaceLimitEncoder(),
     }
     
     @staticmethod
@@ -383,6 +417,11 @@ class ProtocolData:
         
         # 参数名称映射
         self.param_names = ["kp", "ki", "kd", "积分限幅", "正输出限幅", "负输出限幅"]
+        
+        # 翼面限幅+pitch前馈调参
+        self.surface_angle_min_d = [0.0, 0.0, 0.0, 0.0]  # min限幅 4个float
+        self.surface_angle_max_d = [0.0, 0.0, 0.0, 0.0]  # max限幅 4个float
+        self.pitch_need = 0.0  # pitch前馈 float
         
         # Jacobian矩阵
         self.jacobian_matrix = [
@@ -589,10 +628,10 @@ class StateMachineManager:
                 'target_states': None
             },
             MainState.TUNING: {
-                'rows': 4,  # 行数：四个子模式（舵机、前馈、PID、Jacobian）
+                'rows': 5,  # 行数：五个子模式（舵机、前馈、PID、Jacobian、翼面限幅）
                 'cols': 1,  # 列数：一维数组（选择子模式）
-                'labels': ['舵机调参', '前馈调参', 'PID调参', 'Jacobian调参'],
-                'target_states': [SubState.SERVO, SubState.FEEDFORWARD, SubState.PID, SubState.JACOBIAN],
+                'labels': ['舵机调参', '前馈调参', 'PID调参', 'Jacobian调参', '翼面限幅调参'],
+                'target_states': [SubState.SERVO, SubState.FEEDFORWARD, SubState.PID, SubState.JACOBIAN, SubState.SURFACE_LIMIT],
                 # 子模式的具体导航配置
                 'sub_nav_config': {
                     SubState.SERVO: {'rows': 1, 'cols': 4, 'labels': ['舵机1', '舵机2', '舵机3', '舵机4']},
@@ -615,7 +654,12 @@ class StateMachineManager:
                     ]},
                     SubState.JACOBIAN: {'rows': 3, 'cols': 4, 'labels': ['J[0,0]', 'J[0,1]', 'J[0,2]', 'J[0,3]', 
                                                                         'J[1,0]', 'J[1,1]', 'J[1,2]', 'J[1,3]',
-                                                                        'J[2,0]', 'J[2,1]', 'J[2,2]', 'J[2,3]']}
+                                                                        'J[2,0]', 'J[2,1]', 'J[2,2]', 'J[2,3]']},
+                    SubState.SURFACE_LIMIT: {'rows': 1, 'cols': 9, 'labels': [
+                        'min[0]', 'min[1]', 'min[2]', 'min[3]',
+                        'max[0]', 'max[1]', 'max[2]', 'max[3]',
+                        'pitch_need'
+                    ]}
                 }
             }
         }
@@ -800,6 +844,7 @@ class StateMachineManager:
             1: SubState.FEEDFORWARD,
             2: SubState.PID,
             3: SubState.JACOBIAN,
+            4: SubState.SURFACE_LIMIT,
         }
         target_sub = _substate_map.get(self.data.nav_row)
         if target_sub is None:
@@ -819,10 +864,11 @@ class StateMachineManager:
     def _enter_tuning_confirmed(self) -> bool:
         """TUNING 确认态：按子状态分派到各自的 Enter 行为"""
         _sub_dispatch = {
-            SubState.PID:         self._enter_tuning_pid,
-            SubState.JACOBIAN:    self._enter_tuning_jacobian,
-            SubState.SERVO:       self._enter_tuning_servo,
-            SubState.FEEDFORWARD: self._enter_tuning_feedforward,
+            SubState.PID:           self._enter_tuning_pid,
+            SubState.JACOBIAN:      self._enter_tuning_jacobian,
+            SubState.SERVO:         self._enter_tuning_servo,
+            SubState.FEEDFORWARD:   self._enter_tuning_feedforward,
+            SubState.SURFACE_LIMIT: self._enter_tuning_surface_limit,
         }
         handler = _sub_dispatch.get(self.data.sub_state)
         if handler:
@@ -862,6 +908,10 @@ class StateMachineManager:
     def _enter_tuning_feedforward(self) -> None:
         """FEEDFORWARD 子状态：与 SERVO 相同，Enter 不移动光标"""
         pass
+
+    def _enter_tuning_surface_limit(self) -> None:
+        """翼面限幅子状态：Enter 不移动光标，由 playerInput 的缓冲区提交处理"""
+        pass
        
     def handle_number_input(self, number: int) -> None:
         """处理数字输入"""
@@ -888,6 +938,15 @@ class StateMachineManager:
                 servo_index = self.data.nav_col
                 if 0 <= servo_index < 4:
                     self.data.servo_angles[servo_index] = float(number)
+            elif self.data.sub_state == SubState.SURFACE_LIMIT:
+                # 在翼面限幅调参模式下，数字用于设置限幅值和pitch前馈
+                col = self.data.nav_col
+                if 0 <= col < 4:
+                    self.data.surface_angle_min_d[col] = float(number)
+                elif 4 <= col < 8:
+                    self.data.surface_angle_max_d[col - 4] = float(number)
+                elif col == 8:
+                    self.data.pitch_need = float(number)
         else:
             # 在其他模式下，数字用于设置参数值
             if self.data.nav_col == 0:  # 开关
@@ -968,6 +1027,14 @@ class StateMachineManager:
                     if 0 <= self.data.nav_row < 3 and 0 <= self.data.nav_col < 4:
                         value = self.data.jacobian_matrix[self.data.nav_row][self.data.nav_col]
                         return f"J[{self.data.nav_row},{self.data.nav_col}]: {value:.2f}"
+                elif self.data.sub_state == SubState.SURFACE_LIMIT:
+                    col = self.data.nav_col
+                    if 0 <= col < 4:
+                        return f"min[{col}]: {self.data.surface_angle_min_d[col]:.2f}"
+                    elif 4 <= col < 8:
+                        return f"max[{col-4}]: {self.data.surface_angle_max_d[col-4]:.2f}"
+                    elif col == 8:
+                        return f"pitch_need: {self.data.pitch_need:.2f}"
         
         # 其他模式
         label_index = self.data.nav_row * config['cols'] + self.data.nav_col
