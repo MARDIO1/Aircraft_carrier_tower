@@ -39,6 +39,7 @@ class AutoTuner:
         self.servo_file = base_dir / "servo_params.json"
         self.feedforward_file = base_dir / "feedforward_params.json"
         self.pid_file = base_dir / "pid_params.json"
+        self.jacobian_file = base_dir / "jacobian_params.json"
 
     # ==================== 公共入口 ====================
 
@@ -71,6 +72,16 @@ class AutoTuner:
             return
 
         self._apply_pid_target(pid_target)
+
+    def apply_jacobian_from_file(self) -> None:
+        """从 JSON 文件读取 Jacobian 矩阵，并写入飞控。"""
+        jacobian_target = self._load_jacobian_target()
+
+        if jacobian_target is None:
+            print("自动调参: 未找到有效的Jacobian配置，已取消")
+            return
+
+        self._apply_jacobian_target(jacobian_target)
 
     # ==================== 内部步骤 ====================
 
@@ -173,6 +184,21 @@ class AutoTuner:
         self.data.pid_tuning_state = -1
         self._back_to_stop()
 
+    def _apply_jacobian_target(self, target: List[List[float]]) -> None:
+        """写入 Jacobian 矩阵 (3x4)。"""
+        if len(target) != 3 or any(len(row) != 4 for row in target):
+            print("自动调参: Jacobian目标维度必须为3x4，已忽略")
+            return
+
+        if not self._switch_to_tuning_substate(SubState.JACOBIAN):
+            return
+
+        self.data.jacobian_matrix = [list(row) for row in target]
+        print("自动调参: 已应用Jacobian目标矩阵")
+
+        time.sleep(self.hold_time)
+        self._back_to_stop()
+
     # ==================== 配置加载 ====================
 
     def _load_servo_target(self) -> Optional[List[float]]:
@@ -214,4 +240,21 @@ class AutoTuner:
                 return parsed
         except Exception as e:
             print(f"自动调参: 读取PID配置失败: {e}")
+        return None
+
+    def _load_jacobian_target(self) -> Optional[List[List[float]]]:
+        if not self.jacobian_file.exists():
+            return None
+        try:
+            data = json.loads(self.jacobian_file.read_text(encoding="utf-8"))
+            vals = data.get("jacobian_matrix")
+            if isinstance(vals, list) and len(vals) == 3:
+                parsed: List[List[float]] = []
+                for row in vals:
+                    if not isinstance(row, list) or len(row) != 4:
+                        return None
+                    parsed.append([float(v) for v in row])
+                return parsed
+        except Exception as e:
+            print(f"自动调参: 读取Jacobian配置失败: {e}")
         return None

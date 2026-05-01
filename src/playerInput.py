@@ -101,6 +101,11 @@ class PlayerInput:
         try:
             key = event.name
 
+            # 一键自动调参热键：F7（Jacobian）
+            if key == 'f7':
+                self._start_jacobian_auto_tune()
+                return
+
             # 一键自动调参热键：F8（PID）
             if key == 'f8':
                 self._start_pid_auto_tune()
@@ -320,6 +325,26 @@ class PlayerInput:
                 self.auto_tuner.apply_pid_from_file()
             except Exception as e:
                 print(f"PID自动调参执行失败: {e}")
+            finally:
+                self.auto_tuning = False
+
+        self.auto_tune_thread = threading.Thread(target=worker)
+        self.auto_tune_thread.daemon = True
+        self.auto_tune_thread.start()
+
+    def _start_jacobian_auto_tune(self):
+        """启动一键自动调参（Jacobian）。"""
+        if self.auto_tuning:
+            print("自动调参已在进行中，忽略重复触发")
+            return
+
+        self.auto_tuning = True
+
+        def worker():
+            try:
+                self.auto_tuner.apply_jacobian_from_file()
+            except Exception as e:
+                print(f"Jacobian自动调参执行失败: {e}")
             finally:
                 self.auto_tuning = False
 
