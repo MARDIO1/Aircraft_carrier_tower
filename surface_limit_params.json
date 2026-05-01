@@ -1,0 +1,11 @@
+{
+  "_comment": "翼面限幅 + pitch前馈 调参配置文件",
+  "_说明": {
+    "surface_angle_min_d": "四个翼面的最小角度限幅（度），负值表示反向限幅，数组长度固定为4",
+    "surface_angle_max_d": "四个翼面的最大角度限幅（度），数组长度固定为4",
+    "pitch_need": "pitch前馈值（度），对应数据包中 float pitch_need 字段"
+  },
+  "surface_angle_min_d": [1.0, 0.0, 0.0, 0.0],
+  "surface_angle_max_d": [0.0, 0.0, 0.0, 0.0],
+  "pitch_need": 1.0
+}

@@ -40,6 +40,7 @@ class AutoTuner:
         self.feedforward_file = base_dir / "feedforward_params.json"
         self.pid_file = base_dir / "pid_params.json"
         self.jacobian_file = base_dir / "jacobian_params.json"
+        self.surface_limit_file = base_dir / "surface_limit_params.json"
 
     # ==================== 公共入口 ====================
 
@@ -82,6 +83,16 @@ class AutoTuner:
             return
 
         self._apply_jacobian_target(jacobian_target)
+
+    def apply_surface_limit_from_file(self) -> None:
+        """从 JSON 文件读取翼面限幅+pitch前馈目标值，并写入飞控。"""
+        surface_limit_target = self._load_surface_limit_target()
+
+        if surface_limit_target is None:
+            print("自动调参: 未找到有效的翼面限幅配置，已取消")
+            return
+
+        self._apply_surface_limit_target(surface_limit_target)
 
     # ==================== 内部步骤 ====================
 
@@ -199,6 +210,37 @@ class AutoTuner:
         time.sleep(self.hold_time)
         self._back_to_stop()
 
+    def _apply_surface_limit_target(self, target: dict) -> None:
+        """写入翼面限幅+pitch前馈目标值。"""
+        surface_angle_min_d = target.get("surface_angle_min_d")
+        surface_angle_max_d = target.get("surface_angle_max_d")
+        pitch_need = target.get("pitch_need")
+
+        if not (
+            isinstance(surface_angle_min_d, list)
+            and len(surface_angle_min_d) == 4
+            and isinstance(surface_angle_max_d, list)
+            and len(surface_angle_max_d) == 4
+        ):
+            print("自动调参: 翼面限幅目标维度必须各为4，已忽略")
+            return
+
+        if not self._switch_to_tuning_substate(SubState.SURFACE_LIMIT):
+            return
+
+        self.data.surface_angle_min_d = [float(v) for v in surface_angle_min_d]
+        self.data.surface_angle_max_d = [float(v) for v in surface_angle_max_d]
+        if pitch_need is not None:
+            self.data.pitch_need = float(pitch_need)
+
+        print(
+            f"自动调参: 已应用翼面限幅 min={self.data.surface_angle_min_d} "
+            f"max={self.data.surface_angle_max_d} pitch_need={self.data.pitch_need}"
+        )
+
+        time.sleep(self.hold_time)
+        self._back_to_stop()
+
     # ==================== 配置加载 ====================
 
     def _load_servo_target(self) -> Optional[List[float]]:
@@ -211,6 +253,29 @@ class AutoTuner:
                 return [float(v) for v in vals]
         except Exception as e:
             print(f"自动调参: 读取舵机配置失败: {e}")
+        return None
+
+    def _load_surface_limit_target(self) -> Optional[dict]:
+        if not self.surface_limit_file.exists():
+            return None
+        try:
+            data = json.loads(self.surface_limit_file.read_text(encoding="utf-8"))
+            min_d = data.get("surface_angle_min_d")
+            max_d = data.get("surface_angle_max_d")
+            pitch = data.get("pitch_need")
+            if (
+                isinstance(min_d, list)
+                and len(min_d) == 4
+                and isinstance(max_d, list)
+                and len(max_d) == 4
+            ):
+                return {
+                    "surface_angle_min_d": [float(v) for v in min_d],
+                    "surface_angle_max_d": [float(v) for v in max_d],
+                    "pitch_need": float(pitch) if pitch is not None else 0.0,
+                }
+        except Exception as e:
+            print(f"自动调参: 读取翼面限幅配置失败: {e}")
         return None
 
     def _load_feedforward_target(self) -> Optional[List[float]]:

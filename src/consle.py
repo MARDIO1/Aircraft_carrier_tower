@@ -144,6 +144,8 @@ class Consle:
                 mode_text += "(PID)"
             elif sub_state == SubState.JACOBIAN:
                 mode_text += "(JACOBIAN)"
+            elif sub_state == SubState.SURFACE_LIMIT:
+                mode_text += "(LIMIT)"
         
         switch = self.shared_data.main_switch
         switch_text = "开关:ON" if switch == 1 else "开关:OFF"
@@ -364,9 +366,41 @@ class Consle:
                     line = self._truncate_line_for_display(stdscr, row, line)
                     stdscr.addstr(row,0,line)
                     
-                    if input_buffer != self.last_input_buffer:
+                if input_buffer != self.last_input_buffer:
                         self.add_message(f"J[{row_idx},{col_idx}]输入:{input_buffer}")
                         self.last_input_buffer = input_buffer
+                        
+            elif sub_state == SubState.SURFACE_LIMIT:  # SURFACE_LIMIT
+                col = nav_col
+                input_buffer = self.player_input.input_buffer if hasattr(self.player_input, 'input_buffer') else ""
+                
+                if 0 <= col < 4:
+                    label = f"min限幅[{col}]"
+                    value = self.shared_data.surface_angle_min_d[col]
+                elif 4 <= col < 8:
+                    label = f"max限幅[{col - 4}]"
+                    value = self.shared_data.surface_angle_max_d[col - 4]
+                elif col == 8:
+                    label = "pitch_need"
+                    value = self.shared_data.pitch_need
+                else:
+                    label = None
+                    value = None
+                
+                if label is not None:
+                    line = f"{label}:{value:.3f}"
+                    if input_buffer:
+                        line += f" [输入:{input_buffer}]"
+                    line = self._truncate_line_for_display(stdscr, row, line)
+                    stdscr.addstr(row, 0, line)
+                    
+                    if input_buffer != self.last_input_buffer:
+                        self.add_message(f"{label}输入:{input_buffer}")
+                        self.last_input_buffer = input_buffer
+                else:
+                    line = f"翼面限幅:行={nav_row},列={nav_col} (0-3:min 4-7:max 8:pitch)"
+                    line = self._truncate_line_for_display(stdscr, row, line)
+                    stdscr.addstr(row, 0, line)
             else:
                 # 显示导航信息
                 line = f"导航:行={nav_row},列={nav_col}"
