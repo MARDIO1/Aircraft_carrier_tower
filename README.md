@@ -158,3 +158,26 @@ src/
 
 ## 贡献指南
 欢迎提交Issue和Pull Request来改进本项目。请确保代码符合项目规范并通过基本测试。
+# Web 化方案
+
+本仓库现在增加了三条新链路：
+
+1. `src/web_server.py`：保留现有串口控制核心，额外提供 HTTP + WebSocket 实时接口。
+2. `src/analysis_pipeline.py`：自动读取黑匣子 CSV，生成结构化分析报告，供前端和 MATLAB 复用。
+3. `web/`：Next.js 仪表盘，替代原终端控制台，展示实时状态、曲线和参数编辑。
+
+推荐启动顺序：
+
+```bash
+uv sync
+uv run python src/web_server.py
+```
+
+然后进入 `web/` 执行：
+
+```bash
+npm install
+npm run dev
+```
+
+MATLAB 自动分析脚本见 `matlab/auto_blackbox_report.m`，可直接读取分析报告和 CSV 做图。

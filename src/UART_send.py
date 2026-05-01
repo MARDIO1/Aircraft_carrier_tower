@@ -143,12 +143,7 @@ class UARTSender:
             return "无发送记录"
             
     def get_hex_data(self):
-        """获取当前数据的16进制格式"""
-        try:
-            # 编码数据包
-            packet = encode_data(self.shared_data)
-            # 转换为16进制字符串
-            hex_string = ' '.join([f"{byte:02X}" for byte in packet])
-            return hex_string
-        except Exception as e:
-            return f"编码错误: {e}"
+        """获取最近一次成功发送的数据包的16进制格式，不重新编码控制数据。"""
+        if not self._last_packet:
+            return None
+        return " ".join([f"{byte:02X}" for byte in self._last_packet])

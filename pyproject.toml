@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115.0",
     "keyboard>=0.13.5",
     "pyserial>=3.5",
     "serial>=0.0.97",
+    "uvicorn[standard]>=0.30.0",
     "windows-curses>=2.4.1",
 ]
