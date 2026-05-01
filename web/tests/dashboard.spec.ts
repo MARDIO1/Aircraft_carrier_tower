@@ -33,7 +33,7 @@ async function setStateFromPage(page: any, state: string) {
 
 test("dashboard connects, changes states, and round-trips JSON params", async ({ page, request }) => {
   await page.goto("/");
-  await expect(page.getByText("AIRCRAFT CARRIER TOWER")).toBeVisible();
+  await expect(page.getByText("连接与控制")).toBeVisible();
 
   await clickButton(page, "connect");
   await expect.poll(async () => (await snapshot(request)).runtime.serial.com_port).not.toBeNull();

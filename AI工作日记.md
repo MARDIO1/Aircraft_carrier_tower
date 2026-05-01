@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-05-01 · 电机 PWM 脉冲面板 v2.2
+
+### 完成内容
+1. **新增电机 PWM 脉冲面板**（`web/app/page.tsx`）
+   - 单通道 `fan_speed` 输入，范围 0-10000（协议 int16）
+   - 自定义步长输入（默认 1000，范围 1-1000），利用 HTML `step` 属性实现键盘上下键快捷调整
+   - 直接走 `PATCH /api/control { fan_speed: N }`，AUTO 帧第 6-7 字节（`<h` int16）
+   - 面板位于状态按钮与 hex 显示之间
+   - 从 snapshot 恢复时读取 `control.fan_speed` 自动回填
+2. Next.js 编译通过
+
+---
+
+## 2026-05-01 · 前端控制台式重构 v2 + DATA 链路验证 + RX hex 实时显示修复
+
+### 完成内容
+
+1. **前端全面重构成"控制台式"4段布局**（`web/app/page.tsx`）
+2. **CSS 完全重写**（`web/app/globals.css`）
+3. **后端暴露原始收发HEX数据**（已验证）
+4. **DATA 记录链路验证通过**
+5. **Playwright 端到端测试通过**
+6. **RX hex 实时显示修复**（v2.1）：
+   - **bug 根因**：`_process_save_flash_ack_frames()` 中 BlackBox 帧的 `byte[1]` (pid_type) 可能等于 `0xA6` (SAVE_TO_FLASH_ACK) 且 `byte[15]` 可能等于 `0xDD`，概率约 1/65536
+   - **症状**：CRC 校验失败后旧代码仍 `del self.receive_buffer[:16]` 删除帧头，破坏了 BlackBox 的 `0xCC` 帧头，导致 `decode_data()` 永不解码成功，`_last_rx_packet` 永远为 None，前端退回到"等待接收..."
+   - **修复**：CRC 失败时**不再删除** 16 字节，保留给主循环解码 BlackBox；非 ACK 帧且缓冲区 < 76 字节时直接 return，不再逐字节删除 `del self.receive_buffer[0]`
+
+### 尚未实现的功能
+- 飞书MCP云文档同步
+- MATLAB自动分析报告图表
+- 分析报告自动生成与展示
+
+---
+
 ## 2025-11-30 · 项目创建（v0.1）
 
 ### 架构概述

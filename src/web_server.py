@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import serial.tools.list_ports
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
@@ -244,6 +245,15 @@ async def _startup() -> None:
 @app.get("/api/health")
 async def health() -> Dict[str, Any]:
     return {"ok": True, "snapshot_time": time.time()}
+
+
+@app.get("/api/ports")
+async def list_ports() -> Dict[str, Any]:
+    """枚举可用的串口列表供前端下拉选择"""
+    ports = []
+    for p in serial.tools.list_ports.comports():
+        ports.append({"device": p.device, "description": p.description, "hwid": p.hwid})
+    return {"ports": ports}
 
 
 @app.get("/api/snapshot")

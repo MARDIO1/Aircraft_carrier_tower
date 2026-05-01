@@ -310,6 +310,86 @@ h1 {
   min-height: 180px;
 }
 
+.connect-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0 8px;
+}
+
+.connect-left,
+.connect-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.port-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+}
+
+.port-select {
+  background: var(--input-bg);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  padding: 4px 8px;
+  font-size: 0.82rem;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.on {
+  background: #22c55e;
+}
+
+.status-dot.off {
+  background: #ef4444;
+}
+
+.status-sep {
+  color: var(--panel-border);
+}
+
+.hex-panel {
+  min-height: 90px;
+}
+
+.hex-display {
+  font-family: "Courier New", Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #0a0a0a;
+  color: #00ff88;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  min-height: 50px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
 @media (max-width: 1100px) {
   .hero,
   .metrics,

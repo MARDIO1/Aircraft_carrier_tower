@@ -6,6 +6,7 @@
 import threading
 import time
 import struct
+from typing import Optional
 from protocol import SAVE_TO_FLASH_ACK, decode_data, MainState, verify_crc8
 from blackbox_logger import BlackBoxLogger
 
@@ -25,6 +26,7 @@ class UARTReceiver:
         self.last_receive_time = None
         self.receive_count = 0
         self.error_count = 0
+        self._last_rx_packet: Optional[bytes] = None  # AIchange: 缓存最近一次完整76字节帧用于前端hex显示
         
         # 初始化黑箱记录器
         self.blackbox_logger = BlackBoxLogger(max_records=3000)
@@ -113,6 +115,7 @@ class UARTReceiver:
             # 解码数据包
             decoded_data = decode_data(packet)
             if decoded_data:
+                self._last_rx_packet = packet  # AIchange: 缓存原始76字节帧
                 self._update_shared_data(decoded_data)
                 self.receive_count += 1
                 self.last_receive_time = time.time()
@@ -141,15 +144,15 @@ class UARTReceiver:
                     self.receive_count += 1
                     self.last_receive_time = time.time()
                     print(f"Flash save ack received, status={packet[2]}")
-                else:
-                    self.error_count += 1
-                    print("Flash save ack CRC failed")
-                del self.receive_buffer[:16]
-                continue
+                    del self.receive_buffer[:16]
+                    continue
+                # CRC 失败 → 可能是 BlackBox 帧被误判，不删除，留给主循环处理
 
+            # 帧头已找到但不是 ACK 帧且缓冲区 ≥76 字节：交给主循环解码 BlackBox
             if len(self.receive_buffer) >= 76:
                 return
-            del self.receive_buffer[0]
+            # 缓冲区不足 76 字节：等更多数据到达再判断，不逐字节删除
+            return
 
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中（线程安全）"""
@@ -174,6 +177,12 @@ class UARTReceiver:
             print(f"更新共享数据错误: {e}")
             self.error_count += 1
             
+    def get_last_rx_hex(self) -> Optional[str]:
+        """AIchange: 获取最近一次成功接收的76字节原始帧hex字符串"""
+        if self._last_rx_packet is None:
+            return None
+        return " ".join([f"{b:02X}" for b in self._last_rx_packet])
+
     def get_receive_status(self):
         """获取接收状态信息"""
         status_time = "从未接收" if self.last_receive_time is None else f"{time.time() - self.last_receive_time:.1f}秒前"
@@ -183,7 +192,8 @@ class UARTReceiver:
             "receive_count": self.receive_count,
             "error_count": self.error_count,
             "last_receive_time": status_time,
-            "buffer_size": len(self.receive_buffer)
+            "buffer_size": len(self.receive_buffer),
+            "last_rx_hex": self.get_last_rx_hex(),
         }
         
     def get_received_data_summary(self):
