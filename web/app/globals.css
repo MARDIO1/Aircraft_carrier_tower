@@ -119,6 +119,36 @@ h3 {
   min-width: 220px;
 }
 
+.param-row {
+  display: grid;
+  gap: 12px;
+}
+
+.param-row.tight {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.param-block.narrow {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.fan-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.fan-row button {
+  min-width: 72px;
+}
+
+.fan-custom {
+  min-width: 150px;
+}
+
 .toolbar.compact {
   align-items: center;
   margin-top: 10px;
@@ -177,10 +207,18 @@ h3 {
   margin-bottom: 8px;
 }
 
+.table-wrap.compact {
+  overflow-x: visible;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
   min-width: 720px;
+}
+
+table.compact {
+  min-width: 0;
 }
 
 th,
@@ -201,6 +239,11 @@ td input {
   padding: 6px;
 }
 
+table.compact td input {
+  min-width: 0;
+  width: 100%;
+}
+
 @media (max-width: 800px) {
   .shell {
     width: calc(100vw - 16px);
@@ -214,6 +257,10 @@ td input {
   .toolbar button,
   .state-row button {
     flex: 1 1 150px;
+  }
+
+  .param-row.tight {
+    grid-template-columns: 1fr;
   }
 
   .hex-line {

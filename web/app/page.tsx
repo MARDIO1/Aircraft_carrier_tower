@@ -11,7 +11,8 @@ const MAIN_STATES = ["STOP", "TOWER", "AUTO", "TUNING", "DATA"] as const;
 const PID_LABELS = ["att roll", "att pitch", "att yaw", "rate roll", "rate pitch", "rate yaw", "aux"];
 const PID_COLS = ["kp", "ki", "kd", "pmax", "out max", "out min"];
 const JACOBIAN_ROWS = ["L roll", "M pitch", "N yaw"];
-const SURFACE_LABELS = ["surface 1", "surface 2", "surface 3", "surface 4"];
+const SURFACE_ROWS = ["min 1", "min 2", "min 3", "min 4", "max 1", "max 2", "max 3", "max 4", "pitch need"];
+const SURFACE_COLS = ["value"];
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
@@ -69,21 +70,21 @@ export default function Page() {
   const [selectedPort, setSelectedPort] = useState("AUTO_CH340");
   const [flashResult, setFlashResult] = useState("idle");
   const [autoTuneStatus, setAutoTuneStatus] = useState("idle");
-
-  const initial = formFromSnapshot(null);
-  const [fanSpeed, setFanSpeed] = useState(initial.fanSpeed);
-  const [servoAngles, setServoAngles] = useState(initial.servoAngles);
-  const [feedforwardValues, setFeedforwardValues] = useState(initial.feedforwardValues);
-  const [pidParam, setPidParam] = useState(initial.pidParam);
-  const [jacobianMatrix, setJacobianMatrix] = useState(initial.jacobianMatrix);
-  const [surfaceMin, setSurfaceMin] = useState(initial.surfaceMin);
-  const [surfaceMax, setSurfaceMax] = useState(initial.surfaceMax);
-  const [pitchNeed, setPitchNeed] = useState(initial.pitchNeed);
+  const [fanSpeed, setFanSpeed] = useState(1000);
+  const [fanCustom, setFanCustom] = useState(1400);
+  const [servoAngles, setServoAngles] = useState<number[]>([0, 0, 0, 0]);
+  const [feedforwardValues, setFeedforwardValues] = useState<number[]>([0, 0, 0, 0]);
+  const [pidParam, setPidParam] = useState<number[][]>(makeMatrix(7, 6, 0));
+  const [jacobianMatrix, setJacobianMatrix] = useState<number[][]>(makeMatrix(3, 4, 0));
+  const [surfaceMin, setSurfaceMin] = useState<number[]>([-35, -35, -30, -30]);
+  const [surfaceMax, setSurfaceMax] = useState<number[]>([35, 35, 40, 40]);
+  const [pitchNeed, setPitchNeed] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   function applyForm(next: Snapshot | null) {
     const form = formFromSnapshot(next);
     setFanSpeed(form.fanSpeed);
+    setFanCustom(form.fanSpeed || 1400);
     setServoAngles(form.servoAngles);
     setFeedforwardValues(form.feedforwardValues);
     setPidParam(form.pidParam);
@@ -117,11 +118,17 @@ export default function Page() {
       try {
         setSnapshot(JSON.parse(event.data));
       } catch {
-        // Ignore one bad frame instead of freezing controls.
+        // ignore one bad frame
       }
     };
     return () => socket.close();
   }, []);
+
+  useEffect(() => {
+    const tuning = snapshot?.runtime?.auto_tune;
+    if (!tuning) return;
+    setAutoTuneStatus(tuning.running ? `${tuning.stage || "running"}` : tuning.stage || "idle");
+  }, [snapshot]);
 
   async function runAction(name: string, action: () => Promise<void>) {
     setBusy(name);
@@ -134,10 +141,14 @@ export default function Page() {
     }
   }
 
-  async function patchControl(payload: Record<string, unknown>, syncForm = false) {
+  async function patchControl(payload: Record<string, unknown>) {
     const data = await readJson("/api/control", { method: "POST", body: JSON.stringify(payload) });
     setSnapshot(data);
-    if (syncForm) applyForm(data);
+    applyForm(data);
+  }
+
+  function quickPatch(payload: Record<string, unknown>) {
+    void patchControl(payload);
   }
 
   const serial = snapshot?.runtime?.serial ?? {};
@@ -145,7 +156,6 @@ export default function Page() {
   const send = snapshot?.runtime?.send ?? {};
   const analysis = snapshot?.runtime?.analysis ?? {};
   const mainState = snapshot?.state?.main ?? "STOP";
-  const connected = Boolean(serial.connected);
   const blackbox = receive.blackbox_logging ?? {};
   const rxCount = Number(receive.receive_count ?? 0);
   const csvCount = Number(blackbox.record_count ?? 0);
@@ -177,54 +187,10 @@ export default function Page() {
               ))}
             </select>
           </label>
-          <button
-            onClick={() =>
-              runAction("connect", async () => {
-                const data = await readJson("/api/connect", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    com_port: selectedPort === "AUTO_CH340" ? null : selectedPort,
-                    auto_keyword: "CH340",
-                  }),
-                });
-                setStatus(data.connected ? `connected ${data.com_port}` : `connect failed: ${data.error ?? "unknown"}`);
-              })
-            }
-          >
-            connect
-          </button>
-          <button
-            onClick={() =>
-              runAction("disconnect", async () => {
-                await readJson("/api/disconnect", { method: "POST", body: "{}" });
-                setStatus("disconnected");
-              })
-            }
-          >
-            disconnect
-          </button>
-          <button
-            onClick={() =>
-              runAction("load json", async () => {
-                const data = await readJson("/api/params/load", { method: "POST", body: "{}" });
-                setSnapshot(data.snapshot);
-                applyForm(data.snapshot);
-                setStatus("json loaded");
-              })
-            }
-          >
-            load json
-          </button>
-          <button
-            onClick={() =>
-              runAction("save json", async () => {
-                await readJson("/api/params/save", { method: "POST", body: "{}" });
-                setStatus("json saved");
-              })
-            }
-          >
-            save json
-          </button>
+          <button onClick={() => runAction("connect", async () => connectPort(selectedPort, setStatus))}>connect</button>
+          <button onClick={() => runAction("disconnect", async () => disconnectPort(setStatus))}>disconnect</button>
+          <button onClick={() => runAction("load json", async () => loadJson(setSnapshot, applyForm, setStatus))}>load json</button>
+          <button onClick={() => runAction("save json", async () => saveJson(setStatus))}>save json</button>
         </div>
       </section>
 
@@ -235,27 +201,20 @@ export default function Page() {
             <button
               key={state}
               className={state === mainState ? "active" : ""}
-              onClick={() => runAction(`state ${state}`, () => patchControl({ main_state: state }))}
+              onClick={() =>
+                state === "TUNING"
+                  ? runAction("tuning", async () => startTuningSequence(setStatus, setAutoTuneStatus))
+                  : runAction(`state ${state}`, () => patchControl({ main_state: state }))
+              }
             >
               {state}
             </button>
           ))}
         </div>
         <div className="toolbar compact">
-          <button
-            onClick={() =>
-              runAction("flash", async () => {
-                const data = await readJson("/api/flash/save", { method: "POST", body: "{}" });
-                setFlashResult(data.ok ? `ok status=${data.status}` : data.error ?? `fail status=${data.status}`);
-                setSnapshot(data.snapshot);
-              })
-            }
-          >
-            save flash
-          </button>
-          <button onClick={() => runAction("auto jacobian", () => startAutoTune("jacobian"))}>auto jacobian</button>
-          <button onClick={() => runAction("auto surface", () => startAutoTune("surface_limit"))}>auto surface</button>
-          <button onClick={() => runAction("auto all", () => startAutoTune("all"))}>auto all</button>
+          <button onClick={() => runAction("flash", async () => flashSave(setFlashResult, setSnapshot))}>save flash</button>
+          <button onClick={() => runAction("auto jacobian", () => startAutoTune("jacobian", setAutoTuneStatus))}>auto jacobian</button>
+          <button onClick={() => runAction("auto all", () => startAutoTune("all", setAutoTuneStatus))}>auto all</button>
           <span>flash: {flashResult}</span>
           <span>tune: {autoTuneStatus}</span>
         </div>
@@ -280,31 +239,47 @@ export default function Page() {
 
       <section className="panel">
         <h2>4. Parameters</h2>
-        <div className="param-block">
-          <h3>Motor / Servo / Feedforward</h3>
-          <div className="grid four">
-            <NumberField label="fan speed" value={fanSpeed} onChange={setFanSpeed} />
-            {servoAngles.map((value, index) => (
-              <NumberField
-                key={`servo-${index}`}
-                label={`servo ${index + 1}`}
-                value={value}
-                onChange={(next) => setServoAngles(replaceAt(servoAngles, index, next))}
-              />
-            ))}
-            {feedforwardValues.map((value, index) => (
-              <NumberField
-                key={`ff-${index}`}
-                label={`ff ${index + 1}`}
-                value={value}
-                onChange={(next) => setFeedforwardValues(replaceAt(feedforwardValues, index, next))}
-              />
-            ))}
+        <div className="param-row tight">
+          <div className="param-block narrow">
+            <h3>Fan speed</h3>
+            <div className="fan-row">
+              <button onClick={() => quickPatch({ fan_speed: 1000 })}>1000</button>
+              <button onClick={() => quickPatch({ fan_speed: 1600 })}>1600</button>
+              <label className="fan-custom">
+                <span>custom</span>
+                <input
+                  type="number"
+                  step="1"
+                  value={fanCustom}
+                  onChange={(event) => setFanCustom(Number(event.target.value))}
+                />
+              </label>
+              <button onClick={() => quickPatch({ fan_speed: fanCustom })}>apply</button>
+            </div>
           </div>
-          <div className="toolbar compact">
-            <button onClick={() => runAction("apply fan", () => patchControl({ fan_speed: fanSpeed }))}>apply fan</button>
-            <button onClick={() => runAction("apply servo", () => patchControl({ servo_angles: servoAngles }))}>apply servo</button>
-            <button onClick={() => runAction("apply ff", () => patchControl({ feedforward_values: feedforwardValues }))}>apply feedforward</button>
+
+          <div className="param-block narrow">
+            <h3>Servo</h3>
+            <MatrixTable
+              rowLabels={["servo"]}
+              colLabels={["1", "2", "3", "4"]}
+              values={[servoAngles]}
+              onChange={(row, col, value) => setServoAngles(replaceAt(servoAngles, col, value))}
+              compact
+            />
+            <button onClick={() => quickPatch({ servo_angles: servoAngles })}>apply servo</button>
+          </div>
+
+          <div className="param-block narrow">
+            <h3>Feedforward</h3>
+            <MatrixTable
+              rowLabels={["ff"]}
+              colLabels={["1", "2", "3", "4"]}
+              values={[feedforwardValues]}
+              onChange={(row, col, value) => setFeedforwardValues(replaceAt(feedforwardValues, col, value))}
+              compact
+            />
+            <button onClick={() => quickPatch({ feedforward_values: feedforwardValues })}>apply ff</button>
           </div>
         </div>
 
@@ -319,99 +294,130 @@ export default function Page() {
           <button onClick={() => runAction("apply pid", () => patchControl({ pid_param: pidParam }))}>apply pid</button>
         </div>
 
-        <div className="param-block">
-          <h3>Jacobian 3x4</h3>
-          <MatrixTable
-            rowLabels={JACOBIAN_ROWS}
-            colLabels={SURFACE_LABELS}
-            values={jacobianMatrix}
-            onChange={(row, col, value) => setJacobianMatrix(replaceMatrix(jacobianMatrix, row, col, value))}
-          />
-          <button onClick={() => runAction("apply jacobian", () => patchControl({ jacobian_matrix: jacobianMatrix }))}>
-            apply jacobian
-          </button>
-        </div>
-
-        <div className="param-block">
-          <h3>Surface Limit</h3>
-          <div className="grid four">
-            {surfaceMin.map((value, index) => (
-              <NumberField
-                key={`min-${index}`}
-                label={`min ${index + 1}`}
-                value={value}
-                onChange={(next) => setSurfaceMin(replaceAt(surfaceMin, index, next))}
-              />
-            ))}
-            {surfaceMax.map((value, index) => (
-              <NumberField
-                key={`max-${index}`}
-                label={`max ${index + 1}`}
-                value={value}
-                onChange={(next) => setSurfaceMax(replaceAt(surfaceMax, index, next))}
-              />
-            ))}
-            <NumberField label="pitch need" value={pitchNeed} onChange={setPitchNeed} />
+        <div className="param-row tight">
+          <div className="param-block narrow">
+            <h3>Jacobian 3x4</h3>
+            <MatrixTable
+              rowLabels={JACOBIAN_ROWS}
+              colLabels={["1", "2", "3", "4"]}
+              values={jacobianMatrix}
+              onChange={(row, col, value) => setJacobianMatrix(replaceMatrix(jacobianMatrix, row, col, value))}
+              compact
+            />
+            <button onClick={() => runAction("apply jacobian", () => patchControl({ jacobian_matrix: jacobianMatrix }))}>
+              apply jacobian
+            </button>
           </div>
-          <button
-            onClick={() =>
-              runAction("apply surface", () =>
-                patchControl({
-                  surface_angle_min_d: surfaceMin,
-                  surface_angle_max_d: surfaceMax,
-                  pitch_need: pitchNeed,
+
+          <div className="param-block narrow">
+            <h3>Surface Limit</h3>
+            <MatrixTable
+              rowLabels={SURFACE_ROWS}
+              colLabels={SURFACE_COLS}
+              values={surfaceVector(surfaceMin, surfaceMax, pitchNeed)}
+              onChange={(row, col, value) => {
+                if (row < 4) setSurfaceMin(replaceAt(surfaceMin, row, value));
+                else if (row < 8) setSurfaceMax(replaceAt(surfaceMax, row - 4, value));
+                else setPitchNeed(value);
+              }}
+              compact
+            />
+            <button
+              onClick={() =>
+                runAction("apply surface", async () => {
+                  await saveSurfaceLimit(surfaceMin, surfaceMax, pitchNeed);
+                  setStatus("surface limit saved");
                 })
-              )
-            }
-          >
-            apply surface limit
-          </button>
+              }
+            >
+              save surface
+            </button>
+          </div>
         </div>
       </section>
 
       <section className="panel">
         <h2>5. Analysis / Feishu</h2>
         <div className="toolbar compact">
-          <button
-            onClick={() =>
-              runAction("analysis", async () => {
-                const data = await readJson("/api/analysis/run", { method: "POST", body: JSON.stringify({}) });
-                setStatus(`analysis report: ${data.report_path ?? "done"}`);
-              })
-            }
-          >
-            run analysis
-          </button>
-          <button
-            onClick={() =>
-              runAction("feishu", async () => {
-                const data = await readJson("/api/feishu/research");
-                setStatus(`feishu connector: ${data.available_connector ? "available" : "local draft only"}`);
-              })
-            }
-          >
-            feishu status
-          </button>
+          <button onClick={() => runAction("analysis", async () => analysisRun(setStatus))}>run analysis</button>
+          <button onClick={() => runAction("feishu", async () => feishuStatus(setStatus))}>feishu status</button>
           <span>last report: {analysis.last_report_path ?? "none"}</span>
           <span>last error: {analysis.last_error ?? "none"}</span>
         </div>
       </section>
     </main>
   );
-
-  async function startAutoTune(mode: string) {
-    const data = await readJson(`/api/auto-tune?mode=${mode}`, { method: "POST", body: "{}" });
-    setAutoTuneStatus(data.ok ? `${mode} started` : data.error ?? "failed");
-  }
 }
 
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <label>
-      <span>{label}</span>
-      <input type="number" step="0.01" value={value} onChange={(event) => onChange(Number(event.target.value))} />
-    </label>
-  );
+async function connectPort(selectedPort: string, setStatus: (value: string) => void) {
+  const data = await readJson("/api/connect", {
+    method: "POST",
+    body: JSON.stringify({
+      com_port: selectedPort === "AUTO_CH340" ? null : selectedPort,
+      auto_keyword: "CH340",
+    }),
+  });
+  setStatus(data.connected ? `connected ${data.com_port}` : `connect failed: ${data.error ?? "unknown"}`);
+}
+
+async function disconnectPort(setStatus: (value: string) => void) {
+  await readJson("/api/disconnect", { method: "POST", body: "{}" });
+  setStatus("disconnected");
+}
+
+async function loadJson(setSnapshot: (value: Snapshot) => void, applyForm: (value: Snapshot | null) => void, setStatus: (value: string) => void) {
+  const data = await readJson("/api/params/load", { method: "POST", body: "{}" });
+  setSnapshot(data.snapshot);
+  applyForm(data.snapshot);
+  setStatus("json loaded");
+}
+
+async function saveJson(setStatus: (value: string) => void) {
+  await readJson("/api/params/save", { method: "POST", body: "{}" });
+  setStatus("json saved");
+}
+
+async function flashSave(setFlashResult: (value: string) => void, setSnapshot: (value: Snapshot) => void) {
+  const data = await readJson("/api/flash/save", { method: "POST", body: "{}" });
+  setFlashResult(data.ok ? `ok status=${data.status}` : data.error ?? `fail status=${data.status}`);
+  setSnapshot(data.snapshot);
+}
+
+async function startAutoTune(mode: string, setAutoTuneStatus: (value: string) => void) {
+  const data = await readJson(`/api/auto-tune?mode=${mode}`, { method: "POST", body: "{}" });
+  setAutoTuneStatus(data.ok ? `${mode} started` : data.error ?? "failed");
+}
+
+async function startTuningSequence(setStatus: (value: string) => void, setAutoTuneStatus: (value: string) => void) {
+  const data = await readJson("/api/tuning/run", { method: "POST", body: "{}" });
+  setStatus(data.ok ? "tuning sequence started" : data.error ?? "failed");
+  setAutoTuneStatus(data.ok ? `${data.status?.stage ?? "running"}` : data.error ?? "failed");
+}
+
+async function analysisRun(setStatus: (value: string) => void) {
+  const data = await readJson("/api/analysis/run", { method: "POST", body: JSON.stringify({}) });
+  setStatus(`analysis report: ${data.report_path ?? "done"}`);
+}
+
+async function feishuStatus(setStatus: (value: string) => void) {
+  const data = await readJson("/api/feishu/research");
+  setStatus(`feishu connector: ${data.available_connector ? "available" : "local draft only"}`);
+}
+
+async function saveSurfaceLimit(surfaceMin: number[], surfaceMax: number[], pitchNeed: number) {
+  await readJson("/api/control", {
+    method: "POST",
+    body: JSON.stringify({
+      surface_angle_min_d: surfaceMin,
+      surface_angle_max_d: surfaceMax,
+      pitch_need: pitchNeed,
+    }),
+  });
+  await readJson("/api/params/save", { method: "POST", body: "{}" });
+}
+
+function surfaceVector(surfaceMin: number[], surfaceMax: number[], pitchNeed: number) {
+  return [...surfaceMin, ...surfaceMax, pitchNeed].map((value) => [value]);
 }
 
 function MatrixTable({
@@ -419,15 +425,17 @@ function MatrixTable({
   colLabels,
   values,
   onChange,
+  compact = false,
 }: {
   rowLabels: string[];
   colLabels: string[];
   values: number[][];
   onChange: (row: number, col: number, value: number) => void;
+  compact?: boolean;
 }) {
   return (
-    <div className="table-wrap">
-      <table>
+    <div className={`table-wrap ${compact ? "compact" : ""}`}>
+      <table className={compact ? "compact" : ""}>
         <thead>
           <tr>
             <th />

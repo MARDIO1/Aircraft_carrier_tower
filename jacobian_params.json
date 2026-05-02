@@ -1,22 +1,35 @@
 {
+  "_comment": "Jacobian default from flight-controller ControlTask.c::JM. Rows: L roll / M pitch / N yaw. Columns: surface 1-4.",
+  "source_file": "my_task/ControlTask.c",
+  "row_labels": [
+    "L roll",
+    "M pitch",
+    "N yaw"
+  ],
+  "col_labels": [
+    "surface 1",
+    "surface 2",
+    "surface 3",
+    "surface 4"
+  ],
   "jacobian_matrix": [
     [
-      12.0,
-      0.0,
-      0.0,
-      0.0
+      1.0,
+      -1.0,
+      -0.5,
+      0.5
     ],
     [
       0.0,
       0.0,
-      0.0,
-      0.0
+      0.35,
+      0.35
     ],
     [
       0.0,
       0.0,
-      0.0,
-      0.0
+      0.2,
+      -0.2
     ]
   ],
   "saved_at": 1777625316.472277

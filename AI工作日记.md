@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-01 21:35 · PID/Jacobian 表格标签修正 v2.4
+- PID Matrix 行标签从 CH1~CH7 修正为: 内环 Roll/Pitch/Yaw, 外环 Roll/Pitch/Yaw, Row7
+- Jacobian Matrix 列标签从 Roll/Pitch/Yaw/Thr 修正为 FR/FL/BL/BR, 行标签从 X/Y/Z 修正为 L Roll/M Pitch/N Yaw
+- Jacobian 标题补充说明 (3x4, Row=力矩轴, Col=舵面)
+- 参考 T:\ROBOMASTER_2\Project\missilev1\missilev1_start\my_task\ControlTask.c 线166-168 的 PID 分组定义
+- 移除 motorStep 状态变量, PWM 步长固定 1000
+- ch-label 宽度增至 72px, 右对齐, nowrap 防止中文换行
+- Next.js 16.2.4 TypeScript 编译通过
+
+## 2026-05-01 · Flash Save + Auto Tune + Start Sequence v2.3
+
+### 实现
+- 后端 `web_server.py` 新增 `POST /api/flash/save` 端点，3s ack 超时等待
+- 后端 `web_server.py` 新增 `POST /api/auto-tune?mode=` 端点，后台线程执行 AutoTuner
+- 后端 `web_server.py` 新增 `GET /api/auto-tune/status` 查询调参进度
+- 后端 `web_server.py` 新增 `POST /api/start-sequence` 一键运控（load json → tune all → flash save）
+- 前端 `page.tsx` 新增 SAVE FLASH / AUTO TUNE SF / AUTO TUNE ALL / START SEQ 四个按钮
+- 前端 `page.tsx` 新增 FLASH 状态栏（pending/ack/status/time）+ TUNE 进度显示
+- Playwright 测试 `dashboard.spec.ts` 增加 `/api/flash/save` 和 `/api/auto-tune` 断言
+
+### 按钮说明
+| 按钮 | 功能 |
+|------|------|
+| SAVE FLASH | 发送 0xA5 指令 → 飞控烧写 Flash，等 0xA6 ack |
+| AUTO TUNE SF | 从 JSON 读取舵面+前馈 → 通过 TUNING 状态写入飞控 |
+| AUTO TUNE ALL | SF + PID + Jacobian 全量下发 |
+| START SEQ | 一键完整运控：load json → tune all → flash save |
+
+---
+
 ## 2026-05-01 · 电机 PWM 脉冲面板 v2.2
 
 ### 完成内容

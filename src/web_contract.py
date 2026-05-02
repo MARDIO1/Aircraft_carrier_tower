@@ -86,6 +86,7 @@ def runtime_snapshot(
     send_status: Dict[str, Any],
     receive_status: Dict[str, Any],
     analysis_status: Dict[str, Any],
+    auto_tune_status: Dict[str, Any],
 ) -> Dict[str, Any]:
     snapshot = protocol_snapshot(shared_data)
     snapshot["runtime"] = {
@@ -93,5 +94,6 @@ def runtime_snapshot(
         "send": send_status,
         "receive": receive_status,
         "analysis": analysis_status,
+        "auto_tune": auto_tune_status,
     }
     return snapshot

@@ -129,24 +129,60 @@ def save_from(shared_data: Any) -> Dict[str, Any]:
     saved_at = time.time()
 
     PARAM_FILES["servo_angles"].write_text(
-        json.dumps({"servo_angles": params["servo_angles"], "saved_at": saved_at}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "_comment": "Servo trim values kept in the same order as the four control surfaces.",
+                "servo_angles": params["servo_angles"],
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     PARAM_FILES["feedforward_values"].write_text(
-        json.dumps({"feedforward_values": params["feedforward_values"], "saved_at": saved_at}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "_comment": "Feedforward offsets for the four control surfaces.",
+                "feedforward_values": params["feedforward_values"],
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     PARAM_FILES["pid_param"].write_text(
-        json.dumps({"pid_param": params["pid_param"], "saved_at": saved_at}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "_comment": "PID table. Rows map to the tuned PID channels used by the flight controller.",
+                "pid_param": params["pid_param"],
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     PARAM_FILES["jacobian_matrix"].write_text(
-        json.dumps({"jacobian_matrix": params["jacobian_matrix"], "saved_at": saved_at}, ensure_ascii=False, indent=2),
+        json.dumps(
+            {
+                "_comment": "Jacobian default from flight-controller ControlTask.c::JM. Rows: L roll / M pitch / N yaw. Columns: surface 1-4.",
+                "source_file": "my_task/ControlTask.c",
+                "row_labels": ["L roll", "M pitch", "N yaw"],
+                "col_labels": ["surface 1", "surface 2", "surface 3", "surface 4"],
+                "jacobian_matrix": params["jacobian_matrix"],
+                "saved_at": saved_at,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     PARAM_FILES["surface_limit"].write_text(
         json.dumps(
             {
+                "_comment": "Surface limit values used by the flight controller. min/max are per surface and pitch_need is the pitch compensation threshold.",
                 "surface_angle_min_d": params["surface_angle_min_d"],
                 "surface_angle_max_d": params["surface_angle_max_d"],
                 "pitch_need": params["pitch_need"],

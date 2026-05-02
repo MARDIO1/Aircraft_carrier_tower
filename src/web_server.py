@@ -65,7 +65,6 @@ class AnalysisRequest(BaseModel):
 class RuntimeController:
     def __init__(self) -> None:
         self.shared_data = ProtocolData()
-        load_into(self.shared_data)
         self.initializer = Initializer()
         self.uart_sender: Optional[UARTSender] = None
         self.uart_receiver: Optional[UARTReceiver] = None
@@ -73,6 +72,7 @@ class RuntimeController:
         self.last_analysis: Dict[str, Any] = {"last_run_at": None, "last_report_path": None, "last_error": None}
         self.auto_tuner = AutoTuner(self.shared_data)
         self.auto_tune_status: Dict[str, Any] = {"running": False, "stage": "", "error": None, "started_at": None, "done_at": None}
+        load_into(self.shared_data)
 
     def connect(self, com_port: Optional[str] = None, auto_keyword: str = "CH340") -> Dict[str, Any]:
         with self.lock:
@@ -132,6 +132,7 @@ class RuntimeController:
             send_status=send_status,
             receive_status=receive_status,
             analysis_status=self.last_analysis,
+            auto_tune_status=self.auto_tune_status,
         )
 
     def apply_control_patch(self, patch: ControlPatch) -> Dict[str, Any]:
@@ -222,10 +223,15 @@ class RuntimeController:
         return {"saved": saved, "snapshot": self.snapshot()}
 
     def flash_save(self) -> Dict[str, Any]:
-        """请求飞控 Flash 保存 + 返回快照"""
+        """Save to flash after settling back to STOP."""
+        if self.auto_tune_status["running"]:
+            return {"ok": False, "error": "tuning sequence running", "status": self.auto_tune_status}
+        self._settle_to_stop()
+        return self._request_flash_save()
+
+    def _request_flash_save(self, timeout: float = 3.0) -> Dict[str, Any]:
         self.shared_data.request_save_to_flash()
-        # 等待 ack 最多 3 秒
-        deadline = time.time() + 3.0
+        deadline = time.time() + timeout
         while time.time() < deadline:
             with self.shared_data._lock:
                 if self.shared_data.save_flash_ack_received:
@@ -236,7 +242,85 @@ class RuntimeController:
                     self.shared_data.save_flash_last_time = None
                     return {"ok": status == 0, "status": status, "ack_time": last_time, "snapshot": self.snapshot()}
             time.sleep(0.05)
-        return {"ok": False, "status": None, "error": "ack timeout (3s)", "snapshot": self.snapshot()}
+        return {"ok": False, "status": None, "error": f"ack timeout ({timeout:.0f}s)", "snapshot": self.snapshot()}
+
+    def _settle_to_stop(self) -> None:
+        with self.shared_data._lock:
+            self.shared_data.set_main_state(MainState.STOP)
+            self.shared_data.main_switch = 0
+            self.shared_data.fan_speed = 0
+            self.shared_data.nav_confirm = False
+            self.shared_data.pid_tuning_state = -1
+        time.sleep(0.25)
+
+    def _run_tuning_sequence(self, save_flash: bool = False) -> Dict[str, Any]:
+        if self.auto_tune_status["running"]:
+            return {"ok": False, "error": "sequence already running", "status": self.auto_tune_status}
+
+        def _runner():
+            self.auto_tune_status = {
+                "running": True,
+                "stage": "starting",
+                "error": None,
+                "started_at": time.time(),
+                "done_at": None,
+                "flash_result": None,
+            }
+            try:
+                self._settle_to_stop()
+                with self.shared_data._lock:
+                    self.shared_data.set_main_state(MainState.TUNING)
+                    self.shared_data.nav_confirm = True
+
+                self.auto_tune_status["stage"] = "servo"
+                with self.shared_data._lock:
+                    self.shared_data.set_sub_state(SubState.SERVO)
+                time.sleep(0.35)
+
+                self.auto_tune_status["stage"] = "feedforward"
+                with self.shared_data._lock:
+                    self.shared_data.set_sub_state(SubState.FEEDFORWARD)
+                time.sleep(0.35)
+
+                self.auto_tune_status["stage"] = "pid"
+                pid_count = len(self.shared_data.pid_param)
+                previous_pid = self.shared_data.selected_pid
+                for pid_index in range(pid_count):
+                    with self.shared_data._lock:
+                        self.shared_data.set_sub_state(SubState.PID)
+                        self.shared_data.selected_pid = pid_index
+                        self.shared_data.pid_tuning_state = pid_index
+                    time.sleep(0.22)
+                with self.shared_data._lock:
+                    self.shared_data.selected_pid = previous_pid
+                    self.shared_data.pid_tuning_state = -1
+
+                self.auto_tune_status["stage"] = "jacobian"
+                with self.shared_data._lock:
+                    self.shared_data.set_sub_state(SubState.JACOBIAN)
+                time.sleep(0.35)
+
+                self.auto_tune_status["stage"] = "surface_limit"
+                with self.shared_data._lock:
+                    self.shared_data.set_sub_state(SubState.SURFACE_LIMIT)
+                time.sleep(0.35)
+
+                self._settle_to_stop()
+
+                if save_flash:
+                    self.auto_tune_status["stage"] = "flash_save"
+                    flash_result = self._request_flash_save()
+                    self.auto_tune_status["flash_result"] = "ok" if flash_result.get("ok") else "timeout"
+                self.auto_tune_status["stage"] = "done"
+            except Exception as exc:
+                self.auto_tune_status["error"] = str(exc)
+            finally:
+                self.auto_tune_status["running"] = False
+                self.auto_tune_status["done_at"] = time.time()
+
+        import threading
+        threading.Thread(target=_runner, daemon=True).start()
+        return {"ok": True, "status": self.auto_tune_status}
 
     def run_auto_tune(self, mode: str = "servo_feedforward") -> Dict[str, Any]:
         """后台线程执行一键调参"""
@@ -280,54 +364,13 @@ class RuntimeController:
         threading.Thread(target=_runner, daemon=True).start()
         return {"ok": True, "mode": mode, "status": self.auto_tune_status}
 
+    def run_tuning_sequence(self, save_flash: bool = False) -> Dict[str, Any]:
+        return self._run_tuning_sequence(save_flash=save_flash)
+
     def run_start_sequence(self) -> Dict[str, Any]:
         """一键运控：load json → auto tune all → flash save"""
-        if self.auto_tune_status["running"]:
-            return {"ok": False, "error": "sequence already running", "status": self.auto_tune_status}
-
-        def _sequence():
-            self.auto_tune_status = {"running": True, "stage": "load_json", "error": None, "started_at": time.time(), "done_at": None, "flash_result": None}
-            try:
-                self.auto_tune_status["stage"] = "load_json"
-                load_into(self.shared_data)
-
-                self.auto_tune_status["stage"] = "tune_servo"
-                self.auto_tuner.apply_servo_and_feedforward_from_files()
-
-                self.auto_tune_status["stage"] = "tune_pid"
-                self.auto_tuner.apply_pid_from_file()
-
-                self.auto_tune_status["stage"] = "tune_jacobian"
-                self.auto_tuner.apply_jacobian_from_file()
-
-                self.auto_tune_status["stage"] = "tune_surface_limit"
-                self.auto_tuner.apply_surface_limit_from_file()
-
-                self.auto_tune_status["stage"] = "flash_save"
-                self.shared_data.request_save_to_flash()
-                deadline = time.time() + 3.0
-                flash_ok = False
-                while time.time() < deadline:
-                    with self.shared_data._lock:
-                        if self.shared_data.save_flash_ack_received:
-                            flash_ok = self.shared_data.save_flash_status == 0
-                            self.shared_data.save_flash_ack_received = False
-                            self.shared_data.save_flash_status = None
-                            self.shared_data.save_flash_last_time = None
-                            break
-                    time.sleep(0.05)
-                self.auto_tune_status["flash_result"] = "ok" if flash_ok else "timeout"
-
-                self.auto_tune_status["stage"] = "done"
-            except Exception as exc:
-                self.auto_tune_status["error"] = str(exc)
-            finally:
-                self.auto_tune_status["running"] = False
-                self.auto_tune_status["done_at"] = time.time()
-
-        import threading
-        threading.Thread(target=_sequence, daemon=True).start()
-        return {"ok": True, "status": self.auto_tune_status}
+        load_into(self.shared_data)
+        return self._run_tuning_sequence(save_flash=True)
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -449,6 +492,11 @@ async def flash_save() -> Dict[str, Any]:
 @app.post("/api/auto-tune")
 async def auto_tune(mode: str = "servo_feedforward") -> Dict[str, Any]:
     return runtime.run_auto_tune(mode)
+
+
+@app.post("/api/tuning/run")
+async def tuning_run() -> Dict[str, Any]:
+    return runtime.run_tuning_sequence(save_flash=False)
 
 
 @app.get("/api/auto-tune/status")
