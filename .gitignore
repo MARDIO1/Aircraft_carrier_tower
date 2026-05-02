@@ -1,4 +1,4 @@
-blackbox_logs/*.csv
+blackbox_logs/
 
 # Python cache
 __pycache__/

@@ -244,7 +244,7 @@ export default function Page() {
             <h3>Fan speed</h3>
             <div className="fan-row">
               <button onClick={() => quickPatch({ fan_speed: 1000 })}>1000</button>
-              <button onClick={() => quickPatch({ fan_speed: 1600 })}>1600</button>
+              <button onClick={() => quickPatch({ fan_speed: 1400 })}>1400</button>
               <label className="fan-custom">
                 <span>custom</span>
                 <input
