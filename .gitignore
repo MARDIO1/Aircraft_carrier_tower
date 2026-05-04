@@ -11,6 +11,8 @@ src/__pycache__/
 .venv/
 venv/
 env/
+.uv-cache/
+.uv-python/
 
 # IDE files
 .vscode/

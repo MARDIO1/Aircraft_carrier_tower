@@ -29,7 +29,7 @@ def _find_ack(buffer: bytearray):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", default="COM16")
+    parser.add_argument("--port", default="COM15")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()

@@ -60,7 +60,7 @@ class UARTReceiver:
                         self._process_received_data(data)
                 
                 # 控制接收频率
-                time.sleep(0.01)  # 100Hz检查频率
+                time.sleep(0.001)  # 低延迟轮询，支持 TOWER/DATA 实时黑箱回传
                 
             except Exception as e:
                 print(f"串口接收错误: {e}")
@@ -162,7 +162,7 @@ class UARTReceiver:
             self.shared_data.update_blackbox(decoded_data)
 
             # 兜底：只要已进入DATA模式且记录器未开启，则自动开启黑箱记录
-            if self.blackbox_logger and self.shared_data.main_state == MainState.DATA:
+            if self.blackbox_logger and self.shared_data.main_state in (MainState.DATA, MainState.TOWER):
                 if not self.blackbox_logger.is_logging:
                     self.blackbox_logger.start_logging()
 

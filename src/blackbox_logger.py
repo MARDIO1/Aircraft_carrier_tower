@@ -28,6 +28,7 @@ class BlackBoxLogger:
         self.log_file = None
         self.csv_writer = None
         self.log_dir = log_dir
+        self._last_timestamp = -1
         
         # 确保日志目录存在
         if not os.path.exists(self.log_dir):
@@ -68,8 +69,9 @@ class BlackBoxLogger:
             self.csv_writer.writerow(headers)
             
             self.record_count = 0
+            self._last_timestamp = -1
             self.is_logging = True
-            
+
             print(f"开始黑箱记录: {filename}")
             print(f"最大记录条数: {self.max_records}")
             return True
@@ -132,7 +134,14 @@ class BlackBoxLogger:
         try:
             # 记录数据包时间戳（4字节无符号整数）
             packet_timestamp = protocol_data.blackbox_timestamp
-            
+
+            # timestamp循环检测：飞控丢包重发会导致重复，检测到即停止
+            if packet_timestamp == self._last_timestamp:
+                print(f"检测到循环timestamp {packet_timestamp}，自动停止记录")
+                self.stop_logging()
+                return False
+            self._last_timestamp = packet_timestamp
+
             # 准备数据行，精度小数点后三位 - 只记录59字节数据包中实际包含的数据
             row = [
                 str(packet_timestamp),  # 数据包时间戳（原始整数值）

@@ -1,10 +1,10 @@
 {
   "_comment": "Feedforward offsets for the four control surfaces.",
   "feedforward_values": [
-    5.0,
-    -5.0,
+    0.0,
+    0.0,
     0.0,
     0.0
   ],
-  "saved_at": 1777709590.0514271
+  "saved_at": 1777814113.162087
 }

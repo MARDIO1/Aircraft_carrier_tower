@@ -212,7 +212,7 @@ class Consle:
             return
         
         # DATA模式：显示BlackBox数据第一行（角度和角速度）
-        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
+        if self.shared_data.main_state in (MainState.DATA, MainState.TOWER) and self.shared_data.blackbox_received:
             angle = self.shared_data.blackbox_angle
             gyro = self.shared_data.blackbox_gyro
             timestamp = self.shared_data.blackbox_timestamp
@@ -246,7 +246,7 @@ class Consle:
             return
         
         # DATA模式：显示BlackBox数据第二行（加速度、舵机）
-        if self.shared_data.main_state == MainState.DATA and self.shared_data.blackbox_received:
+        if self.shared_data.main_state in (MainState.DATA, MainState.TOWER) and self.shared_data.blackbox_received:
             acc = self.shared_data.blackbox_acc
             rudder = self.shared_data.blackbox_rudder
             
