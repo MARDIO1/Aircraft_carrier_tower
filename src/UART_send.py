@@ -6,11 +6,13 @@
 import threading
 import time
 import serial
+import serial.tools.list_ports
 from protocol import encode_data
 
 # 串口断线重连配置
 _RECONNECT_INTERVAL = 1.0   # 每次重连尝试间隔（秒）
 _RECONNECT_MAX_TRIES = 30   # 最多重试次数（30次 × 1秒 = 30秒后放弃）
+_CH340_SCAN_INTERVAL = 2.0  # CH340 重新扫描间隔（秒），用于 COM 号变化时的动态发现
 
 class UARTSender:
     def __init__(self, serial_port, shared_data):
@@ -26,6 +28,14 @@ class UARTSender:
         self.send_thread = None
         self.last_sent_data = None
         self._last_packet = None  # 最近一次成功编码的数据包
+        self._auto_keyword = "CH340"  # 用于动态扫描 CH340 的关键词
+        self._initializer_ref = None  # 可选：指向 Initializer 实例的引用，用于 scan_and_find_ch340
+        
+    def set_initializer(self, initializer):
+        """设置 Initializer 引用，用于动态扫描 CH340 端口"""
+        self._initializer_ref = initializer
+        if initializer and initializer.com_port:
+            self.port_name = initializer.com_port
         
     def start_sending(self):
         """开始发送数据"""
@@ -109,31 +119,72 @@ class UARTSender:
 
     def _try_reconnect(self) -> bool:
         """
-        尝试重新打开串口，最多 _RECONNECT_MAX_TRIES 次。
+        智能重连：先尝试恢复原端口，失败后扫描 CH340 新端口。
+        支持 CH340 拔插后 COM 号变化的场景。
         成功返回 True，彻底失败返回 False。
         """
-        port_name = getattr(self.serial_port, 'port', None)
-        baudrate  = getattr(self.serial_port, 'baudrate', 115200)
+        port_name = self.serial_port.port if self.serial_port else None
+        baudrate = self.serial_port.baudrate if self.serial_port else 115200
+        last_scan_time = 0.0  # 控制 CH340 扫描频率
 
-        if port_name is None:
-            return False
-
+        # 第1阶段：尝试在原端口重连（前几次快速尝试）
         for attempt in range(1, _RECONNECT_MAX_TRIES + 1):
             if not self.running:
                 return False
+
+            # ── 每 _CH340_SCAN_INTERVAL 秒重新扫描系统 COM 口 ──
+            now = time.monotonic()
+            if now - last_scan_time >= _CH340_SCAN_INTERVAL:
+                last_scan_time = now
+                found_port = self._scan_ch340_port()
+                if found_port:
+                    port_name = found_port
+                    baudrate = 115200
+                    print(f"CH340 扫描发现新端口: {found_port}")
+
+            # ── 尝试打开端口 ──
             try:
                 self.serial_port.close()
             except Exception:
                 pass
+
             try:
-                self.serial_port.open()
+                self.serial_port = serial.Serial(
+                    port=port_name,
+                    baudrate=baudrate,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE,
+                    timeout=1
+                )
                 print(f"串口 {port_name} 重连成功（第 {attempt} 次尝试）")
                 return True
-            except serial.SerialException:
-                print(f"串口 {port_name} 重连失败（{attempt}/{_RECONNECT_MAX_TRIES}），{_RECONNECT_INTERVAL}秒后重试")
+            except Exception:
+                target = port_name or "未知"
+                print(f"串口 {target} 重连失败（{attempt}/{_RECONNECT_MAX_TRIES}），{_RECONNECT_INTERVAL}秒后重试")
                 time.sleep(_RECONNECT_INTERVAL)
 
         return False
+
+    def _scan_ch340_port(self) -> str | None:
+        """扫描系统 COM 口，查找 CH340 设备。返回端口名或 None。"""
+        # 优先使用 Initializer 的 scan_and_find_ch340
+        if self._initializer_ref:
+            result = self._initializer_ref.scan_and_find_ch340(self._auto_keyword)
+            if result:
+                return result
+        # 兜底：自己扫描
+        try:
+            ports = serial.tools.list_ports.comports()
+            for port in ports:
+                if self._auto_keyword.lower() in (port.description or "").lower():
+                    return port.device
+            for port in ports:
+                if self._auto_keyword.lower() in (port.hwid or "").lower():
+                    return port.device
+        except Exception:
+            pass
+        return None
                 
     def get_last_sent_info(self):
         """获取最后发送的数据信息"""

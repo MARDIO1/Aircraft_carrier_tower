@@ -47,6 +47,21 @@ class Initializer:
             if description_keyboard in port['description']:
                 return port['device'] 
         return None
+    def scan_and_find_ch340(self, auto_keyword: str = "CH340"):
+        """
+        重新扫描系统COM口并查找匹配关键词的设备。
+        返回找到的端口device字符串，找不到返回None。
+        此方法每次都重新枚举端口列表，适合拔插后COM号变化的场景。
+        """
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if auto_keyword.lower() in (port.description or "").lower():
+                return port.device
+        # 兜底：description 无 CH340 但 hwid 中有
+        for port in ports:
+            if auto_keyword.lower() in (port.hwid or "").lower():
+                return port.device
+        return None
     def initialize_serial(self,com_port=None,auto_keyword="CH340"):
         """
         初始化串口连接
