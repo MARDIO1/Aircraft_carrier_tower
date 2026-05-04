@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "keyboard>=0.13.5",
     "pyserial>=3.5",
+    "python-docx>=1.2.0",
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
     "serial>=0.0.97",

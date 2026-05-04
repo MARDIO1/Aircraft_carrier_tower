@@ -309,6 +309,20 @@ export default function Page() {
         <div className="toolbar compact">
           <button onClick={() => runAction("analysis", () => analysisRun(setStatus))}>run analysis</button>
           <button onClick={() => runAction("feishu", () => feishuStatus(setStatus))}>feishu status</button>
+          <button style={{ backgroundColor: "#20b2aa", color: "white" }} onClick={async () => {
+            setStatus("正在同步最新参数到飞书知识库多维表格...");
+            try {
+              const res = await fetch("http://127.0.0.1:8000/api/sync_feishu", { method: "POST" });
+              const result = await res.json();
+              if (result.success) {
+                setStatus("✅ 飞书多维表格打表同步成功！");
+              } else {
+                setStatus("❌ 飞书同步失败: " + result.error + "\n" + result.logs);
+              }
+            } catch(e: any) {
+              setStatus("❌ 飞书后台请求出错: " + e.message);
+            }
+          }}>☁️ 同步当前参数到飞书 Bitable</button>
           <span className="tag">报告: {analysis.last_report_path ?? "none"}</span>
           <span className="tag">错误: {analysis.last_error ?? "none"}</span>
         </div>

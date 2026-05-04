@@ -402,8 +402,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def _startup() -> None:
-    # Try auto-connect, but keep the dashboard usable if no serial device is present.
-    runtime.connect()
+    # 跳过启动时的自动连接，避免没有插硬件时无限次死循环重连。
+    # 需要跑飞控时，请在网页端手动点击“连接”。
+    pass
 
 
 @app.get("/api/health")
@@ -482,6 +483,17 @@ async def analysis_run(request: AnalysisRequest) -> Dict[str, Any]:
 @app.get("/api/feishu/research")
 async def feishu_research() -> Dict[str, Any]:
     return {"available_connector": False, "checklist": feishu_research_checklist()}
+
+@app.post("/api/sync_feishu")
+async def sync_feishu() -> Dict[str, Any]:
+    # 增加自动打表到飞书的高级能力
+    import subprocess
+    import sys
+    try:
+        res = subprocess.run([sys.executable, "tools/insert_new_bitable.py"], capture_output=True, text=True, timeout=10)
+        return {"success": res.returncode == 0, "logs": res.stdout, "error": res.stderr}
+    except Exception as e:
+        return {"success": False, "logs": "", "error": str(e)}
 
 
 @app.post("/api/flash/save")
