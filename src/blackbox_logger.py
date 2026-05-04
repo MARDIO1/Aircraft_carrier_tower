@@ -29,7 +29,8 @@ class BlackBoxLogger:
         self.csv_writer = None
         self.log_dir = log_dir
         self._last_timestamp = -1
-        
+        self.seen_timestamps = set()
+
         # 确保日志目录存在
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
@@ -67,9 +68,10 @@ class BlackBoxLogger:
                 'rudder1', 'rudder2', 'rudder3', 'rudder4'
             ]
             self.csv_writer.writerow(headers)
-            
+
             self.record_count = 0
             self._last_timestamp = -1
+            self.seen_timestamps.clear()
             self.is_logging = True
 
             print(f"开始黑箱记录: {filename}")
@@ -135,14 +137,16 @@ class BlackBoxLogger:
             # 记录数据包时间戳（4字节无符号整数）
             packet_timestamp = protocol_data.blackbox_timestamp
 
-            # timestamp循环检测：飞控丢包重发会导致重复，检测到即停止
-            if packet_timestamp == self._last_timestamp:
-                print(f"检测到循环timestamp {packet_timestamp}，自动停止记录")
+            # timestamp循环检测：飞控可能会循环发送整个BlackBox的记录，如果发现当前时间戳在本次记录中已存在，则代表一个周期接收完毕。
+            if packet_timestamp in self.seen_timestamps:
+                print(f"检测到循环timestamp {packet_timestamp}（已接收过），智能截断，自动停止记录CSV！")
                 self.stop_logging()
                 return False
+            
+            self.seen_timestamps.add(packet_timestamp)
             self._last_timestamp = packet_timestamp
 
-            # 准备数据行，精度小数点后三位 - 只记录59字节数据包中实际包含的数据
+            # 准备数据行，精度小数点后三位 - 只记录59字节数据包中实际包 含的数据
             row = [
                 str(packet_timestamp),  # 数据包时间戳（原始整数值）
                 str(protocol_data.blackbox_timestamp2),

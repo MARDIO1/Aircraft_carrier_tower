@@ -255,13 +255,21 @@ class UARTReceiver:
             # 消除显示线程读到"前几个字段是新数据、后几个字段是旧数据"的竞态窗口
             self.shared_data.update_blackbox(decoded_data)
 
-            # 兜底：只要已进入DATA模式且记录器未开启，则自动开启黑箱记录
-            if self.blackbox_logger and self.shared_data.main_state in (MainState.DATA, MainState.TOWER):
-                if not self.blackbox_logger.is_logging:
-                    self.blackbox_logger.start_logging()
+            # 根据状态切换决定是否启动/停止记录
+            current_state = self.shared_data.main_state
+            if getattr(self, '_last_main_state', None) != current_state:
+                if current_state in (MainState.DATA, MainState.TOWER):
+                    if self.blackbox_logger and not self.blackbox_logger.is_logging:
+                        # 确保重启
+                        self.blackbox_logger.seen_timestamps.clear()
+                        self.blackbox_logger.start_logging()
+                else:
+                    if self.blackbox_logger and self.blackbox_logger.is_logging:
+                        self.blackbox_logger.stop_logging()
+                self._last_main_state = current_state
 
-            # CSV 记录在锁外执行，避免持锁期间做磁盘 IO
-            if self.blackbox_logger:
+            # 只有当正在记录时，才将数据写入CSV
+            if self.blackbox_logger and self.blackbox_logger.is_logging:
                 self.blackbox_logger.log_data(
                     float(decoded_data.blackbox_timestamp),
                     decoded_data
