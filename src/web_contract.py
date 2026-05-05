@@ -41,6 +41,8 @@ def protocol_snapshot(shared_data: Any) -> Dict[str, Any]:
                 "nav_row": shared_data.nav_row,
                 "nav_col": shared_data.nav_col,
                 "nav_confirm": shared_data.nav_confirm,
+                "flight_state_machine": getattr(shared_data, 'flight_state_machine', 0),
+                "vision_last_switch": getattr(shared_data, 'vision_last_switch', 0),
             },
             "control": {
                 "main_switch": shared_data.main_switch,

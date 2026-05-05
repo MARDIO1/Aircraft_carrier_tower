@@ -8,6 +8,16 @@ type PortInfo = { device: string; description: string; hwid?: string };
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 const MAIN_STATES = ["STOP", "TOWER", "AUTO", "TUNING", "DATA"] as const;
+const FLIGHT_STATE_LABELS: Record<number, string> = {
+  0x00: "STOP",
+  0x01: "AUTO",
+  0x02: "TOWER",
+  0xB1: "DATA",
+};
+const VISION_LABELS: Record<number, string> = {
+  0x00: "OFFLINE",
+  0x01: "ONLINE",
+};
 const PID_LABELS = ["att roll", "att pitch", "att yaw", "rate roll", "rate pitch", "rate yaw", "aux"];
 const PID_COLS = ["kp", "ki", "kd", "pmax", "out max", "out min"];
 const JACOBIAN_ROWS = ["L roll", "M pitch", "N yaw"];
@@ -139,6 +149,8 @@ export default function Page() {
   const send = snapshot?.runtime?.send ?? {};
   const analysis = snapshot?.runtime?.analysis ?? {};
   const mainState = snapshot?.state?.main ?? "STOP";
+  const flightStateMachine = Number(snapshot?.state?.flight_state_machine ?? -1);
+  const visionLastSwitch = Number(snapshot?.state?.vision_last_switch ?? -1);
   const blackbox = receive.blackbox_logging ?? {};
   const rxCount = Number(receive.receive_count ?? 0);
   const csvCount = Number(blackbox.record_count ?? 0);
@@ -199,7 +211,28 @@ export default function Page() {
         </div>
       </section>
 
-      {/* ── 3. 收发原始数据 ── */}
+      {/* ── 3. 飞控心跳状态 ── */}
+      <section className="panel heartbeat-bar">
+        <h2>飞控心跳状态 (UART下行)</h2>
+        <div className="heartbeat-row">
+          <div className={`heartbeat-card ${getFlightStateColor(flightStateMachine)}`}>
+            <span className="heartbeat-label">飞控主状态机</span>
+            <span className="heartbeat-value">{FLIGHT_STATE_LABELS[flightStateMachine] ?? `0x${flightStateMachine.toString(16).toUpperCase()}`}</span>
+            <span className="heartbeat-hex">0x{flightStateMachine.toString(16).toUpperCase().padStart(2, '0')}</span>
+          </div>
+          <div className={`heartbeat-card ${getVisionColor(visionLastSwitch)}`}>
+            <span className="heartbeat-label">视觉模块</span>
+            <span className="heartbeat-value">{VISION_LABELS[visionLastSwitch] ?? `0x${visionLastSwitch.toString(16).toUpperCase()}`}</span>
+            <span className="heartbeat-hex">0x{visionLastSwitch.toString(16).toUpperCase().padStart(2, '0')}</span>
+          </div>
+          <div className="heartbeat-card">
+            <span className="heartbeat-label">帧计数</span>
+            <span className="heartbeat-value">{rxCount}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 4. 收发原始数据 ── */}
       <section className="panel hex-bar">
         <h2>原始数据帧 (HEX)</h2>
         <div className="hex-line">
@@ -395,6 +428,20 @@ async function saveSurfaceLimit(surfaceMin: (number|string)[], surfaceMax: (numb
 
 function surfaceVector(surfaceMin: (number|string)[], surfaceMax: (number|string)[], pitchNeed: number|string) {
   return [...surfaceMin, ...surfaceMax, pitchNeed].map((v) => [v]);
+}
+
+function getFlightStateColor(state: number): string {
+  if (state === -1) return "offline";
+  if ([0x01, 0x02].includes(state)) return "active";
+  if (state === 0x00) return "stop";
+  if (state === 0xB1) return "data";
+  return "unknown";
+}
+
+function getVisionColor(state: number): string {
+  if (state === -1) return "offline";
+  if (state === 0x01) return "active";
+  return "offline";
 }
 
 // ── Components ──
