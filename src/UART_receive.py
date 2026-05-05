@@ -163,90 +163,89 @@ class UARTReceiver:
         return None
                 
     def _process_received_data(self, data):
-        """处理接收到的原始数据，只处理76字节BlackBox数据包"""
+        """处理接收到的原始数据，支持不同长度的独立数据帧（5字节心跳、16字节ACK、76字节黑匣子）"""
         if not data:
             return
             
         # 将数据添加到缓冲区
         self.receive_buffer.extend(data)
 
-        # 缓冲区防溢出保护：超过上限时保留最后 256 字节（≥3 个完整帧），丢弃最老的垃圾字节
+        # 缓冲区防溢出保护：超过上限时丢弃老旧垃圾字节
         MAX_BUFFER = 1024
         if len(self.receive_buffer) > MAX_BUFFER:
             self.receive_buffer = self.receive_buffer[-256:]
 
-        self._process_save_flash_ack_frames()
-
-        # 尝试从缓冲区中提取完整的76字节数据包
-        while len(self.receive_buffer) >= 76:
+        while True:
             # 查找帧头 0xCC
-            start_idx = -1
-            for i in range(len(self.receive_buffer) - 75):  # 需要至少59字节
-                if self.receive_buffer[i] == 0xCC:  # 帧头
-                    start_idx = i
-                    break
-            
-            if start_idx == -1:
-                # 没有找到帧头，清空缓冲区
-                self.receive_buffer.clear()
-                return
-                
-            # 检查是否有完整的59字节数据包
-            if start_idx + 76 > len(self.receive_buffer):
-                # 数据包不完整，等待更多数据
-                if start_idx > 0:
-                    self.receive_buffer = self.receive_buffer[start_idx:]
-                return
-                
-            # 提取完整数据包
-            packet = bytes(self.receive_buffer[start_idx:start_idx + 76])
-            
-            # 检查帧尾
-            if packet[-1] != 0xDD:  # 帧尾不匹配
-                # 帧尾不匹配，跳过这个帧头
-                self.receive_buffer = self.receive_buffer[start_idx + 76:]
-                continue
-            
-            # 解码数据包
-            decoded_data = decode_data(packet)
-            if decoded_data:
-                self._last_rx_packet = packet  # AIchange: 缓存原始76字节帧
-                self._update_shared_data(decoded_data)
-                self.receive_count += 1
-                self.last_receive_time = time.time()
-            else:
-                self.error_count += 1
-            
-            # 从缓冲区中移除已处理的数据包
-            self.receive_buffer = self.receive_buffer[start_idx + 76:]
-                
-    def _process_save_flash_ack_frames(self):
-        while len(self.receive_buffer) >= 16:
             start_idx = self.receive_buffer.find(0xCC)
-            if start_idx < 0:
-                if len(self.receive_buffer) > 75:
-                    self.receive_buffer = self.receive_buffer[-75:]
-                return
+            if start_idx == -1:
+                # 没找到 0xCC，清空全部并退出
+                self.receive_buffer.clear()
+                break
+                
+            # 丢弃头部的垃圾字节
             if start_idx > 0:
-                del self.receive_buffer[:start_idx]
-            if len(self.receive_buffer) < 16:
-                return
-
-            packet = bytes(self.receive_buffer[:16])
-            if packet[1] == SAVE_TO_FLASH_ACK and packet[-1] == 0xDD:
+                self.receive_buffer = self.receive_buffer[start_idx:]
+            
+            # 当前 buffer 现在一定是以 0xCC 开头
+            buffer_len = len(self.receive_buffer)
+            # 短于5个字节时，任何帧都不足以构成，需要等下一波数据
+            if buffer_len < 5:
+                break
+                
+            frame_processed = False
+            
+            # 1. 尝试解析 5字节心跳短包
+            if buffer_len >= 5 and self.receive_buffer[4] == 0xDD:
+                packet = self.receive_buffer[:5]
+                if verify_crc8(bytearray(packet), crc_position=-2, calc_start=0):
+                    self.shared_data.update_heartbeat(packet[1], packet[2])
+                    self.receive_count += 1
+                    self.last_receive_time = time.time()
+                    self.receive_buffer = self.receive_buffer[5:]
+                    frame_processed = True
+            
+            # 2. 尝试解析 16字节保存确认帧
+            if not frame_processed and buffer_len >= 16 and self.receive_buffer[1] == SAVE_TO_FLASH_ACK and self.receive_buffer[15] == 0xDD:
+                packet = self.receive_buffer[:16]
                 if verify_crc8(bytearray(packet), crc_position=-2, calc_start=0):
                     self.shared_data.update_save_flash_ack(packet[2])
                     self.receive_count += 1
                     self.last_receive_time = time.time()
-                    print(f"Flash save ack received, status={packet[2]}")
-                    continue
-                # CRC 失败 → 可能是 BlackBox 帧被误判，不删除，留给主循环处理
+                    # print(f"Flash save ack received, status={packet[2]}")
+                    self.receive_buffer = self.receive_buffer[16:]
+                    frame_processed = True
+                    
+            # 3. 尝试解析 76字节黑匣子帧
+            if not frame_processed and buffer_len >= 76 and self.receive_buffer[75] == 0xDD:
+                packet = self.receive_buffer[:76]
+                decoded_data = decode_data(bytes(packet))
+                if decoded_data:  # decode_data 内部会校验 CRC
+                    self._last_rx_packet = bytes(packet)
+                    self._update_shared_data(decoded_data)
+                    self.receive_count += 1
+                    self.last_receive_time = time.time()
+                    self.receive_buffer = self.receive_buffer[76:]
+                    frame_processed = True
+                else:
+                    # 如果找到了 76 字节，且首尾都是 CC..DD，但解包或 CRC 失败（例如假帧头）：
+                    # 为了防止死循环卡死在这个包，我们只能放弃这个 CC
+                    self.error_count += 1
+                    self.receive_buffer = self.receive_buffer[1:]
+                    frame_processed = True # 标记为已处理以继续下一次循环
 
-            # 帧头已找到但不是 ACK 帧且缓冲区 ≥76 字节：交给主循环解码 BlackBox
-            if len(self.receive_buffer) >= 76:
-                return
-            # 缓冲区不足 76 字节：等更多数据到达再判断，不逐字节删除
-            return
+            if not frame_processed:
+                # 没有任何匹配的帧：有两种情况
+                # 1. 这个包还在接收中，长度还没达到 16 或者 76。
+                # 2. 这是一个无效的假 0xCC，我们需要丢弃它。
+                # 策略：如果长度还没达到最大包长度(76)，我们就先等待。
+                if buffer_len < 76:
+                    break
+                else:
+                    # 达到了最大长度，但没有一个分支匹配（或者匹配失败），只能说明这是假的 0xCC
+                    self.error_count += 1
+                    self.receive_buffer = self.receive_buffer[1:]
+
 
     def _update_shared_data(self, decoded_data):
         """将解码后的BlackBox数据更新到共享数据结构中（线程安全）"""

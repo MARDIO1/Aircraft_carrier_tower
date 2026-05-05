@@ -454,6 +454,10 @@ class ProtocolData:
         self.save_flash_status = None
         self.save_flash_last_time = None
         
+        # 新增状态：飞控当前主状态机和视觉在线状态
+        self.flight_state_machine = 0
+        self.vision_last_switch = 0
+        
         # 接收数据（保留字段，但不再使用普通数据包）
         self.received_switch = 0
         self.received_angle_roll = 0.0
@@ -515,6 +519,18 @@ class ProtocolData:
             self.save_flash_ack_received = True
             self.save_flash_status = status
             self.save_flash_last_time = time.time()
+
+    def update_heartbeat(self, state_machine: int, vision_switch: int) -> None:
+        """更新飞控主状态机和视觉识别状态"""
+        with self._lock:
+            self.flight_state_machine = state_machine
+            self.vision_last_switch = vision_switch
+            self.last_received_time = time.time()
+            
+    def get_heartbeat_states(self) -> Tuple[int, int]:
+        """获取心跳包中的主状态和视觉状态"""
+        with self._lock:
+            return self.flight_state_machine, self.vision_last_switch
 
 # ==================== 向后兼容函数 ====================
 

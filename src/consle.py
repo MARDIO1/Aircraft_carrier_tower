@@ -234,11 +234,16 @@ class Consle:
                        abs(pitch) > 0.001 or 
                        abs(yaw) > 0.001)    
 
+            heartbeat_text = ""
+            if hasattr(self.shared_data, 'flight_state_machine'):
+                fsm, vis = self.shared_data.get_heartbeat_states()
+                heartbeat_text = f" [飞控状态:0x{fsm:02X} 视觉:{'在线' if vis == 1 else '离线'}]"
+
             if has_data:
-                line = f"接收:开关={switch} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f})"
+                line = f"接收:开关={switch} 角度=({roll:.1f},{pitch:.1f},{yaw:.1f}){heartbeat_text}"
                 stdscr.addstr(row, 0, line)
             else:
-                stdscr.addstr(row, 0, "接收:无数据")
+                stdscr.addstr(row, 0, f"接收:无数据{heartbeat_text}")
     
     def _draw_tuning_line(self,stdscr,row):
         """第四行：根据模式显示不同的信息"""
