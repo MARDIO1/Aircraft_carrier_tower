@@ -69,14 +69,15 @@ export default function Page() {
   const [flashResult, setFlashResult] = useState("idle");
   const [autoTuneStatus, setAutoTuneStatus] = useState("idle");
   const [fanSpeed, setFanSpeed] = useState(1000);
-  const [fanCustom, setFanCustom] = useState(1400);
-  const [servoAngles, setServoAngles] = useState<number[]>([0, 0, 0, 0]);
-  const [feedforwardValues, setFeedforwardValues] = useState<number[]>([0, 0, 0, 0]);
-  const [pidParam, setPidParam] = useState<number[][]>(makeMatrix(7, 6, 0));
-  const [jacobianMatrix, setJacobianMatrix] = useState<number[][]>(makeMatrix(3, 4, 0));
-  const [surfaceMin, setSurfaceMin] = useState<number[]>([-35, -35, -30, -30]);
-  const [surfaceMax, setSurfaceMax] = useState<number[]>([35, 35, 40, 40]);
-  const [pitchNeed, setPitchNeed] = useState(0);
+  const [fanCustom, setFanCustom] = useState<number|string>(1400);
+  const [fanPreset2, setFanPreset2] = useState(1400);
+  const [servoAngles, setServoAngles] = useState<(number|string)[]>([0, 0, 0, 0]);
+  const [feedforwardValues, setFeedforwardValues] = useState<(number|string)[]>([0, 0, 0, 0]);
+  const [pidParam, setPidParam] = useState<(number|string)[][]>(makeMatrix(7, 6, 0));
+  const [jacobianMatrix, setJacobianMatrix] = useState<(number|string)[][]>(makeMatrix(3, 4, 0));
+  const [surfaceMin, setSurfaceMin] = useState<(number|string)[]>([-35, -35, -30, -30]);
+  const [surfaceMax, setSurfaceMax] = useState<(number|string)[]>([35, 35, 40, 40]);
+  const [pitchNeed, setPitchNeed] = useState<number|string>(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   function applyForm(next: Snapshot | null) {
@@ -225,12 +226,13 @@ export default function Page() {
           <h3>Fan speed</h3>
           <div className="fan-row">
             <button onClick={() => quickPatch({ fan_speed: 1000 })}>1000</button>
-            <button onClick={() => quickPatch({ fan_speed: 1400 })}>1400</button>
+            <button onClick={() => quickPatch({ fan_speed: Number(fanPreset2) || 0 })}>{fanPreset2}</button>
             <label className="fan-custom">
               <span>custom</span>
-              <input type="number" step="1" value={fanCustom} onChange={(e) => setFanCustom(Number(e.target.value))} />
+              <input type="number" step="1" value={fanCustom} onChange={(e) => setFanCustom(e.target.value)} />
             </label>
-            <button onClick={() => quickPatch({ fan_speed: fanCustom })}>apply</button>
+            <button onClick={() => setFanPreset2(Number(fanCustom) || 0)}>set preset</button>
+            <button onClick={() => quickPatch({ fan_speed: Number(fanCustom) || 0 })}>apply</button>
           </div>
         </div>
 
@@ -383,7 +385,7 @@ async function feishuStatus(setStatus: (v: string) => void) {
   setStatus(`feishu connector: ${data.available_connector ? "available" : "local draft only"}`);
 }
 
-async function saveSurfaceLimit(surfaceMin: number[], surfaceMax: number[], pitchNeed: number) {
+async function saveSurfaceLimit(surfaceMin: (number|string)[], surfaceMax: (number|string)[], pitchNeed: number|string) {
   await readJson("/api/control", {
     method: "POST",
     body: JSON.stringify({ surface_angle_min_d: surfaceMin, surface_angle_max_d: surfaceMax, pitch_need: pitchNeed }),
@@ -391,7 +393,7 @@ async function saveSurfaceLimit(surfaceMin: number[], surfaceMax: number[], pitc
   await readJson("/api/params/save", { method: "POST", body: "{}" });
 }
 
-function surfaceVector(surfaceMin: number[], surfaceMax: number[], pitchNeed: number) {
+function surfaceVector(surfaceMin: (number|string)[], surfaceMax: (number|string)[], pitchNeed: number|string) {
   return [...surfaceMin, ...surfaceMax, pitchNeed].map((v) => [v]);
 }
 
@@ -400,8 +402,8 @@ function surfaceVector(surfaceMin: number[], surfaceMax: number[], pitchNeed: nu
 function MatrixTable({
   rowLabels, colLabels, values, onChange, compact = false,
 }: {
-  rowLabels: string[]; colLabels: string[]; values: number[][];
-  onChange: (row: number, col: number, value: number) => void; compact?: boolean;
+  rowLabels: string[]; colLabels: string[]; values: (number|string)[][];
+  onChange: (row: number, col: number, value: number|string) => void; compact?: boolean;
 }) {
   return (
     <div className={`table-wrap ${compact ? "compact" : ""}`}>
@@ -418,7 +420,7 @@ function MatrixTable({
               <th>{rowLabels[ri] ?? `row ${ri + 1}`}</th>
               {row.map((v, ci) => (
                 <td key={`${ri}-${ci}`}>
-                  <input type="number" step="0.01" value={v} onChange={(e) => onChange(ri, ci, Number(e.target.value))} />
+                  <input type="number" step="0.01" value={v} onChange={(e) => onChange(ri, ci, e.target.value)} />
                 </td>
               ))}
             </tr>
@@ -429,10 +431,10 @@ function MatrixTable({
   );
 }
 
-function replaceAt(values: number[], index: number, value: number) {
+function replaceAt<T>(values: T[], index: number, value: T) {
   const next = [...values]; next[index] = value; return next;
 }
 
-function replaceMatrix(values: number[][], row: number, col: number, value: number) {
+function replaceMatrix<T>(values: T[][], row: number, col: number, value: T) {
   return values.map((items, ri) => (ri === row ? replaceAt(items, col, value) : items));
 }
