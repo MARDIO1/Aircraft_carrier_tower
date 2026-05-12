@@ -1,10 +1,10 @@
 {
   "_comment": "Servo trim values kept in the same order as the four control surfaces.",
   "servo_angles": [
-    -10.0,
     0.0,
-    15.0,
+    0.0,
+    0.0,
     0.0
   ],
-  "saved_at": 1778402684.8867087
+  "saved_at": 1778504853.9598637
 }
