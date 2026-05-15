@@ -355,6 +355,44 @@ table.compact td input {
   color: var(--muted);
 }
 
+/* ── 飞书打表区域 ── */
+.feishu-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-top: 10px;
+}
+
+.feishu-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1 1 auto;
+}
+
+.feishu-label {
+  min-width: 140px;
+}
+
+.feishu-label span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.sync-btn {
+  background-color: #20b2aa;
+  color: white;
+  border: 1px solid #1a8a84;
+  white-space: nowrap;
+}
+
+.sync-btn:hover {
+  background-color: #1a8a84;
+}
+
 @media (max-width: 800px) {
   .shell {
     width: calc(100vw - 16px);

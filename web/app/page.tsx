@@ -81,6 +81,8 @@ export default function Page() {
   const [fanSpeed, setFanSpeed] = useState(1000);
   const [fanCustom, setFanCustom] = useState<number|string>(1400);
   const [fanPreset2, setFanPreset2] = useState(1400);
+  const [gridCount, setGridCount] = useState<number|string>(0);   // 镖架格数
+  const [distance, setDistance] = useState<number|string>(0);     // 距离
   const [servoAngles, setServoAngles] = useState<(number|string)[]>([0, 0, 0, 0]);
   const [feedforwardValues, setFeedforwardValues] = useState<(number|string)[]>([0, 0, 0, 0]);
   const [pidParam, setPidParam] = useState<(number|string)[][]>(makeMatrix(7, 6, 0));
@@ -344,10 +346,30 @@ export default function Page() {
         <div className="toolbar compact">
           <button onClick={() => runAction("analysis", () => analysisRun(setStatus))}>run analysis</button>
           <button onClick={() => runAction("feishu", () => feishuStatus(setStatus))}>feishu status</button>
-          <button style={{ backgroundColor: "#20b2aa", color: "white" }} onClick={async () => {
+        </div>
+        <div className="feishu-row">
+          <div className="feishu-inputs">
+            <label className="feishu-label">
+              <span>镖架格数</span>
+              <input type="number" step="0.1" value={gridCount} onChange={(e) => setGridCount(e.target.value)} />
+            </label>
+            <label className="feishu-label">
+              <span>距离 (m)</span>
+              <input type="number" step="0.1" value={distance} onChange={(e) => setDistance(e.target.value)} />
+            </label>
+          </div>
+          <button className="sync-btn" onClick={async () => {
             setStatus("正在同步最新参数到飞书知识库多维表格...");
             try {
-              const res = await fetch("http://127.0.0.1:8000/api/sync_feishu", { method: "POST" });
+              const res = await fetch("http://127.0.0.1:8000/api/sync_feishu", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  镖架格数: Number(gridCount) || 0,
+                  距离: Number(distance) || 0,
+                  风扇转速: Number(fanPreset2) || 1500,
+                }),
+              });
               const result = await res.json();
               if (result.success) {
                 setStatus("✅ 飞书多维表格打表同步成功！");
@@ -358,6 +380,8 @@ export default function Page() {
               setStatus("❌ 飞书后台请求出错: " + e.message);
             }
           }}>☁️ 同步当前参数到飞书 Bitable</button>
+        </div>
+        <div className="toolbar compact" style={{ marginTop: "8px" }}>
           <span className="tag">报告: {analysis.last_report_path ?? "none"}</span>
           <span className="tag">错误: {analysis.last_error ?? "none"}</span>
         </div>

@@ -57,6 +57,13 @@ class ConnectRequest(BaseModel):
     auto_keyword: str = "CH340"
 
 
+class SyncFeishuRequest(BaseModel):
+    """同步到飞书多维表格的请求参数"""
+    镖架格数: float = 0
+    距离: float = 0
+    风扇转速: int = 1500
+
+
 class AnalysisRequest(BaseModel):
     csv_path: Optional[str] = None
     write_feishu_draft: bool = Field(default=True)
@@ -485,13 +492,29 @@ async def feishu_research() -> Dict[str, Any]:
     return {"available_connector": False, "checklist": feishu_research_checklist()}
 
 @app.post("/api/sync_feishu")
-async def sync_feishu() -> Dict[str, Any]:
-    # 增加自动打表到飞书的高级能力
+async def sync_feishu(request: SyncFeishuRequest) -> Dict[str, Any]:
+    """同步当前参数到飞书多维表格（打表功能）"""
     import subprocess
     import sys
+    import os
     try:
-        res = subprocess.run([sys.executable, "tools/insert_new_bitable.py"], capture_output=True, text=True, timeout=10)
-        return {"success": res.returncode == 0, "logs": res.stdout, "error": res.stderr}
+        script = str(Path(__file__).resolve().parents[1] / "tools" / "insert_new_bitable.py")
+        res = subprocess.run(
+            [
+                sys.executable, script,
+                str(request.镖架格数),
+                str(request.距离),
+                str(request.风扇转速),
+            ],
+            capture_output=True, text=True, timeout=15,
+            cwd=os.path.dirname(script),
+        )
+        if res.returncode == 0:
+            return {"success": True, "logs": res.stdout, "error": ""}
+        else:
+            return {"success": False, "logs": res.stdout, "error": res.stderr or "非零退出码"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "logs": "", "error": "飞书同步超时(15s)"}
     except Exception as e:
         return {"success": False, "logs": "", "error": str(e)}
 

@@ -1,17 +1,17 @@
 {
   "_comment": "Surface limit values used by the flight controller. min/max are per surface and pitch_need is the pitch compensation threshold.",
   "surface_angle_min_d": [
-    -35.0,
-    -35.0,
+    -40.0,
+    -40.0,
     -50.0,
     -50.0
   ],
   "surface_angle_max_d": [
-    35.0,
-    35.0,
+    40.0,
+    40.0,
     90.0,
     90.0
   ],
-  "pitch_need": 30.0,
-  "saved_at": 1778504853.9598637
+  "pitch_need": 15.0,
+  "saved_at": 1778675790.159265
 }
