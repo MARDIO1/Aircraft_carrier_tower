@@ -170,10 +170,19 @@ class TowerEncoder(EncoderBase):
     """TOWER状态编码器"""
     
     def encode(self, data: 'ProtocolData') -> Optional[bytearray]:
-        """编码TOWER状态数据：0xAA + 0x02 + uint8[1] + int16[1] + float32[4] + 0xBB (22字节)"""
+        """编码TOWER状态数据：0xAA + 0x02 + uint32timestamp + int16[1] + float32[4] + crc+0xBB (26字节)
+        
+        注意：格式与AutoEncoder完全对齐（含4字节时间戳），飞控端用同一解析函数处理0x01和0x02。
+        """
         packet = bytearray()
         packet.append(0xAA)  # START_BYTE
         packet.append(0x02)  # TOWER状态标识
+
+        # 时间戳（与AutoEncoder一致）
+        now = datetime.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        ms_today = int((now - midnight).total_seconds() * 1000)
+        packet.extend(struct.pack('<I', ms_today))
       
         packet.extend(struct.pack('<h', data.fan_speed))
         
@@ -181,11 +190,11 @@ class TowerEncoder(EncoderBase):
             packet.extend(struct.pack('<f', float(angle)))
         
         packet.append(0xBB)  # END_BYTE
-        paceket_with_crc = add_crc8_to_packet(packet,calc_start=0,calc_end=-1)
-        return paceket_with_crc
+        packet_with_crc = add_crc8_to_packet(packet, calc_start=0, calc_end=-1)
+        return packet_with_crc
     
     def get_packet_length(self) -> int:
-        return 22
+        return 26
 
 class ServoEncoder(EncoderBase):
     """SERVO调参编码器"""
